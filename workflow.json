@@ -1,0 +1,58 @@
+{
+  "nodes": [
+    {
+      "id": "learner-request",
+      "type": "Input",
+      "label": "Learner Request",
+      "nodeCategory": "input"
+    },
+    {
+      "id": "embedded-systems-learning-coach",
+      "type": "Agent",
+      "label": "Embedded Systems Learning Coach",
+      "nodeCategory": "agent",
+      "description": "Adaptive coach for embedded-systems diagnostics, practice, assessment, feedback, targeted lectures, mastery evidence, and next-activity recommendations.",
+      "agent_id": "6ad7832685ce151fbfaa88f4"
+    },
+    {
+      "id": "coach-output",
+      "type": "Output",
+      "label": "Coach Response",
+      "nodeCategory": "end"
+    }
+  ],
+  "edges": [
+    {
+      "source": "learner-request",
+      "target": "embedded-systems-learning-coach"
+    },
+    {
+      "source": "embedded-systems-learning-coach",
+      "target": "coach-output"
+    }
+  ],
+  "agents": [
+    {
+      "agent_id": "6ad7832685ce151fbfaa88f4",
+      "name": "Embedded Systems Learning Coach",
+      "description": "Adaptive coach for embedded-systems diagnostics, practice, assessment, feedback, targeted lectures, mastery evidence, and next-activity recommendations.",
+      "provider_id": "Anthropic",
+      "model": "anthropic/claude-sonnet-4-6",
+      "temperature": 0.3,
+      "top_p": 0.9,
+      "workflow_node_id": "embedded-systems-learning-coach",
+      "response_schema": "response_schemas/embedded_systems_learning_coach.json",
+      "tool_configs": [
+        {
+          "tool_name": "E2B",
+          "tool_source": "aci",
+          "action_names": ["E2B__RUN_CODE"],
+          "persist_auth": false,
+          "server_id": "",
+          "provider_uuid": "",
+          "credential_id": ""
+        }
+      ]
+    }
+  ]
+}

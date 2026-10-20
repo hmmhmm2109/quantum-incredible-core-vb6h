@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Embedded Systems Learning Coach — Core Screens</title>
+<style>
+  *{box-sizing:border-box}
+  :root{
+    --outside:#d8dae8;--ink:#25273a;--muted:#6c7086;--paper:#eff1f5;
+    --panel:#fff;--line:#ccd0da;--accent:#7287fd;--accent2:#8839ef;
+    --green:#40a02b;--red:#d20f39;--amber:#df8e1d;--blue:#1e66f5;
+    --code:#303446;--codeInk:#c6d0f5;--nav:#e6e9ef
+  }
+  body{margin:0;background:var(--outside);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}
+  .stack{max-width:1440px;margin:auto;padding:28px;display:grid;gap:32px}
+  .screen{background:var(--paper);border:1px solid #b9bdca;box-shadow:0 18px 48px #55586f25;min-height:820px;overflow:hidden}
+  .screen-label{height:46px;padding:13px 18px;background:#fff;color:#333;border-bottom:1px solid #b9bdca;font:600 13px/20px Inter,system-ui,sans-serif;letter-spacing:.01em}
+  .app{min-height:774px;display:grid;grid-template-columns:218px 1fr}
+  .sidebar{background:var(--nav);border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column}
+  .brand{font-weight:800;font-size:16px;margin:0 8px 28px}.brand b{color:var(--accent)}
+  .nav{display:grid;gap:5px}.nav div{padding:10px 12px;border-radius:8px;color:var(--muted)}
+  .nav .active{background:var(--panel);color:var(--ink);box-shadow:0 1px 4px #55586f18;font-weight:700}
+  .profile{margin-top:auto;padding:12px;border-top:1px solid var(--line);color:var(--muted)}
+  .main{min-width:0}.topbar{height:66px;background:#ffffffaa;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px}
+  .topbar strong{font-size:15px}.top-actions{display:flex;align-items:center;gap:10px;color:var(--muted)}
+  .pill,.tag{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:var(--panel);font-size:12px}
+  .content{padding:28px;max-width:1160px;margin:auto}
+  h1{font-size:29px;letter-spacing:-.035em;margin:0 0 6px}h2{font-size:18px;margin:0 0 15px}p{margin:0;color:var(--muted)}
+  .eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--accent2);font-weight:800}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;box-shadow:0 1px 5px #55586f0e}
+  .btn{border:0;border-radius:8px;padding:10px 14px;font-weight:750;background:var(--accent);color:#fff}
+  .btn.secondary{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1.45fr .75fr;gap:18px;margin-top:24px}
+  .recommend{padding:25px;background:linear-gradient(135deg,#fff 55%,#e8eaff);min-height:260px}
+  .recommend h2{font-size:24px;margin:10px 0 8px}.meta{display:flex;gap:7px;flex-wrap:wrap;margin:16px 0 24px}
+  .why{border-left:3px solid var(--accent);padding-left:12px;margin:18px 0;color:var(--muted)}
+  .domains{display:grid;gap:11px}.domain-row{display:grid;grid-template-columns:70px 1fr 74px;gap:10px;align-items:center}
+  .bar{height:8px;border-radius:9px;background:#dfe2eb;overflow:hidden}.fill{height:100%;background:var(--accent);border-radius:9px}
+  .history{margin-top:18px}.history-row{display:grid;grid-template-columns:1fr 110px 90px;gap:10px;padding:12px 0;border-top:1px solid var(--line)}
+  .status-good{color:var(--green);font-weight:750}.status-warn{color:var(--amber);font-weight:750}
+  .workspace{height:708px;display:grid;grid-template-columns:39% 61%}
+  .brief{padding:24px;border-right:1px solid var(--line);overflow:auto;background:var(--panel)}
+  .brief h1{font-size:23px}.requirements{padding-left:20px;color:var(--muted)}.requirements li{margin:8px 0}
+  .hint{margin-top:24px;border:1px solid #c8ccef;background:#f3f4ff;border-radius:10px;padding:14px}
+  .work{background:var(--code);display:grid;grid-template-rows:46px 1fr 190px 58px;color:var(--codeInk)}
+  .tabs{display:flex;border-bottom:1px solid #464a60}.tabs span{padding:13px 18px;color:#949cbb}.tabs .on{color:#fff;border-bottom:2px solid #8caaee}
+  pre{margin:0;padding:22px;font:14px/1.7 "SFMono-Regular",Consolas,monospace;white-space:pre-wrap}
+  .kw{color:#ca9ee6}.fn{color:#8caaee}.str{color:#a6d189}.num{color:#ef9f76}
+  .terminal{border-top:1px solid #464a60;background:#292c3c;padding:14px 18px;font:12px/1.55 monospace;overflow:hidden}
+  .terminal .ok{color:#a6d189}.terminal .bad{color:#e78284}
+  .actionbar{border-top:1px solid #464a60;display:flex;justify-content:space-between;align-items:center;padding:9px 14px}
+  .result-layout{display:grid;grid-template-columns:1.2fr .8fr;gap:18px;margin-top:24px}
+  .score{display:flex;align-items:center;gap:18px}.score-ring{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--green) 0 82%,#dfe2eb 82%);position:relative}
+  .score-ring:after{content:"82";position:absolute;inset:9px;background:white;border-radius:50%;display:grid;place-items:center;font-size:23px;font-weight:800}
+  .check{display:grid;grid-template-columns:26px 1fr 80px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+  .lecture{margin-top:18px;border-left:4px solid var(--accent2)}
+  .impact{display:grid;gap:12px}.impact .level{font-size:27px;font-weight:850}.delta{color:var(--green);font-weight:750}
+  .map-wrap{padding:24px 28px}.map-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:22px}
+  .map{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+  .lane{background:#e8eaf1;border:1px solid var(--line);border-radius:12px;padding:12px;min-height:560px}
+  .lane-head{padding:6px 4px 13px;font-weight:850;display:flex;justify-content:space-between}
+  .node{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:10px}
+  .node.active{border:2px solid var(--accent);box-shadow:0 5px 16px #7287fd24}.node.locked{opacity:.5}
+  .node small{color:var(--muted);display:block;margin-top:4px}.dots{letter-spacing:2px;color:var(--accent)}
+  @media(max-width:900px){.stack{padding:10px}.app{grid-template-columns:1fr}.sidebar{display:none}.grid2,.result-layout{grid-template-columns:1fr}.workspace{grid-template-columns:1fr;height:auto}.brief{border-right:0}.map{grid-template-columns:1fr 1fr}.screen{min-height:700px}}
+</style>
+</head>
+<body>
+<div class="stack">
+
+<section class="screen">
+  <div class="screen-label">Screen 1 of 4 · Home · See current ability and start the best next exercise</div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><b>&lt;/&gt;</b> EmbedPath</div>
+      <div class="nav"><div class="active">⌂ Home</div><div>▶ Learn</div><div>⌁ Skill Map</div><div>◷ History</div><div>⚙ Profile</div></div>
+      <div class="profile">AR &nbsp; Alex Rivera<br><small>Intermediate track</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><strong>Tuesday, October 20</strong><div class="top-actions"><span class="pill">🔥 6 day streak</span><span class="pill">◐ Theme</span><span class="pill">AR</span></div></header>
+      <div class="content">
+        <span class="eyebrow">Adaptive practice</span><h1>Good morning, Alex.</h1><p>Your pointer fundamentals are solid. Today, apply them to a real debugging problem.</p>
+        <div class="grid2">
+          <div class="card recommend">
+            <span class="eyebrow">Recommended next</span><h2>Repair a corrupted packet parser</h2>
+            <p>Find and fix three memory-safety defects in a C parser handling variable-length network frames.</p>
+            <div class="meta"><span class="tag">C</span><span class="tag">Debugging</span><span class="tag">Intermediate</span><span class="tag">25 min</span></div>
+            <div class="why"><strong>Why this?</strong><br>Your last two attempts showed strong pointer arithmetic but inconsistent bounds validation.</div>
+            <button class="btn">Start exercise →</button>
+          </div>
+          <div class="card">
+            <h2>Your domains</h2>
+            <div class="domains">
+              <div class="domain-row"><b>C</b><div class="bar"><div class="fill" style="width:64%"></div></div><small>Intermediate</small></div>
+              <div class="domain-row"><b>C++</b><div class="bar"><div class="fill" style="width:43%"></div></div><small>Foundation</small></div>
+              <div class="domain-row"><b>Linux</b><div class="bar"><div class="fill" style="width:71%"></div></div><small>Advanced</small></div>
+              <div class="domain-row"><b>Network</b><div class="bar"><div class="fill" style="width:51%"></div></div><small>Intermediate</small></div>
+              <div class="domain-row"><b>BSP</b><div class="bar"><div class="fill" style="width:28%"></div></div><small>Basic</small></div>
+            </div>
+            <button class="btn secondary" style="margin-top:22px;width:100%">Open Skill Map</button>
+          </div>
+        </div>
+        <div class="card history">
+          <h2>Recent attempts</h2>
+          <div class="history-row"><span><b>Trace a failed TCP handshake</b><br><small>Networking · Scenario</small></span><span class="status-good">Passed</span><span>18 min</span></div>
+          <div class="history-row"><span><b>Review unsafe ownership</b><br><small>C++ · Code review</small></span><span class="status-warn">Retry</span><span>22 min</span></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<section class="screen">
+  <div class="screen-label">Screen 2 of 4 · Practice Workspace · Solve, run, inspect, and request staged help</div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><b>&lt;/&gt;</b> EmbedPath</div>
+      <div class="nav"><div>⌂ Home</div><div class="active">▶ Learn</div><div>⌁ Skill Map</div><div>◷ History</div></div>
+      <div class="profile">Exercise 2 of 4<br><small>Session · 18:42</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><strong>Repair a corrupted packet parser</strong><div class="top-actions"><span class="pill">C · Intermediate</span><span class="pill">Save draft</span></div></header>
+      <div class="workspace">
+        <section class="brief">
+          <span class="eyebrow">Debugging challenge</span><h1>Stop the out-of-bounds read</h1>
+          <p>A sensor gateway intermittently crashes while parsing packets received over UDP. Repair the parser without changing the wire format.</p>
+          <h2 style="margin-top:25px">Requirements</h2>
+          <ul class="requirements">
+            <li>Validate the declared payload length.</li>
+            <li>Reject truncated headers safely.</li>
+            <li>Preserve valid zero-length payloads.</li>
+            <li>Do not allocate heap memory.</li>
+          </ul>
+          <div class="card" style="margin-top:22px"><b>Files</b><p style="margin-top:8px">parser.c<br>parser.h<br>test_parser.c</p></div>
+          <div class="hint"><b>Hint 1 of 4 · Conceptual nudge</b><p style="margin-top:6px">Before reading any header field, prove that the buffer contains the complete header.</p><button class="btn secondary" style="margin-top:12px">Reveal next hint</button></div>
+        </section>
+        <section class="work">
+          <div class="tabs"><span class="on">parser.c</span><span>parser.h</span><span>Tests</span><span>Notes</span></div>
+          <pre><span class="kw">int</span> <span class="fn">parse_packet</span>(<span class="kw">const</span> uint8_t *buf, size_t len) {
+  <span class="kw">const</span> packet_header_t *header =
+      (<span class="kw">const</span> packet_header_t *)buf;
+
+  uint16_t payload_len = ntohs(header-&gt;length);
+
+  <span class="kw">if</span> (payload_len &gt; len) {
+    <span class="kw">return</span> PARSE_TRUNCATED;
+  }
+
+  <span class="kw">return</span> <span class="fn">process_payload</span>(
+      buf + <span class="kw">sizeof</span>(*header), payload_len);
+}</pre>
+          <div class="terminal">$ clang -Wall -Wextra -fsanitize=address parser.c test_parser.c<br><span class="ok">✓ 6 public tests passed</span><br><span class="bad">✕ ASan: heap-buffer-overflow in parse_packet:5</span><br><span class="bad">✕ 2 hidden edge cases failed</span></div>
+          <div class="actionbar"><span>Ln 8, Col 3 · C11 · Sandbox isolated</span><div><button class="btn secondary" style="color:#fff;border-color:#656b89">Run tests</button> <button class="btn">Submit solution</button></div></div>
+        </section>
+      </div>
+    </main>
+  </div>
+</section>
+
+<section class="screen">
+  <div class="screen-label">Screen 3 of 4 · Result & Review · Understand evidence, close the gap, and choose the next move</div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><b>&lt;/&gt;</b> EmbedPath</div>
+      <div class="nav"><div>⌂ Home</div><div class="active">▶ Learn</div><div>⌁ Skill Map</div><div>◷ History</div></div>
+      <div class="profile">Attempt saved<br><small>October 20 · 10:42</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><strong>Attempt review</strong><div class="top-actions"><span class="pill status-good">✓ Completed</span><span class="pill">◐ Theme</span></div></header>
+      <div class="content">
+        <span class="eyebrow">Evaluation complete</span><h1>You fixed the crash—and found the root cause.</h1><p>The parser now rejects truncated headers and validates payload length relative to the header boundary.</p>
+        <div class="result-layout">
+          <div>
+            <div class="card">
+              <div class="score"><div class="score-ring"></div><div><h2 style="margin-bottom:5px">Strong solution</h2><p>Correctness 9/10 · Reasoning 7/10 · Safety 9/10</p></div></div>
+              <h2 style="margin-top:24px">Test evidence</h2>
+              <div class="check"><span class="status-good">✓</span><span>Public functional tests</span><b>6 / 6</b></div>
+              <div class="check"><span class="status-good">✓</span><span>Hidden boundary tests</span><b>4 / 4</b></div>
+              <div class="check"><span class="status-good">✓</span><span>AddressSanitizer</span><b>Clean</b></div>
+              <div class="check"><span class="status-warn">!</span><span>Reasoning mentioned bounds, but not integer conversion</span><b>Review</b></div>
+            </div>
+            <div class="card lecture">
+              <span class="eyebrow">5-minute mini-lecture</span><h2>Validate the container before its contents</h2>
+              <p>A length field is untrusted data inside an untrusted container. First prove the header itself exists. Then convert and validate its declared length against the bytes remaining after the header—not against the original buffer length.</p>
+              <button class="btn secondary" style="margin-top:15px">Try a related example</button>
+            </div>
+          </div>
+          <aside>
+            <div class="card impact">
+              <span class="eyebrow">Mastery impact</span><div><p>C · Bounds validation</p><div class="level">58 → 66 <span class="delta">+8</span></div></div>
+              <div class="bar"><div class="fill" style="width:66%"></div></div>
+              <p><b>Intermediate · 78% confidence</b><br>Based on four exercises across debugging, code review, and implementation.</p>
+              <hr style="border:0;border-top:1px solid var(--line);width:100%">
+              <b>Recommended next</b><p>Review integer conversion hazards in network protocols.</p>
+              <button class="btn">Start next exercise →</button>
+              <button class="btn secondary">Retry without hints</button>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<section class="screen">
+  <div class="screen-label">Screen 4 of 4 · Skill Map · Inspect domain levels, prerequisites, confidence, and evidence</div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><b>&lt;/&gt;</b> EmbedPath</div>
+      <div class="nav"><div>⌂ Home</div><div>▶ Learn</div><div class="active">⌁ Skill Map</div><div>◷ History</div><div>⚙ Profile</div></div>
+      <div class="profile">Overall trajectory<br><small class="status-good">↑ Improving steadily</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><strong>Your Skill Map</strong><div class="top-actions"><span class="pill">Evidence: last 90 days</span><span class="pill">◐ Theme</span></div></header>
+      <div class="map-wrap">
+        <div class="map-head"><div><span class="eyebrow">Five independent tracks</span><h1>Know where you are—and why.</h1><p>Select a topic to inspect its evidence or practice it next.</p></div><button class="btn secondary">Retake diagnostic</button></div>
+        <div class="map">
+          <div class="lane"><div class="lane-head"><span>C</span><small>Intermediate</small></div>
+            <div class="node"><b>Types & control flow</b><small>Advanced · 91% confidence</small><span class="dots">●●●●○</span></div>
+            <div class="node active"><b>Pointers & bounds</b><small>Intermediate · 78% confidence</small><span class="dots">●●●○○</span></div>
+            <div class="node"><b>Memory & lifetime</b><small>Intermediate · 64% confidence</small><span class="dots">●●●○○</span></div>
+            <div class="node locked"><b>Concurrency</b><small>Needs memory prerequisites</small></div>
+          </div>
+          <div class="lane"><div class="lane-head"><span>C++</span><small>Foundation</small></div>
+            <div class="node"><b>Core language</b><small>Intermediate · 72%</small><span class="dots">●●●○○</span></div>
+            <div class="node"><b>RAII & lifetime</b><small>Foundation · 68%</small><span class="dots">●●○○○</span></div>
+            <div class="node"><b>STL & algorithms</b><small>Foundation · 51%</small><span class="dots">●●○○○</span></div>
+            <div class="node locked"><b>Templates</b><small>Complete RAII practice</small></div>
+          </div>
+          <div class="lane"><div class="lane-head"><span>Linux</span><small>Advanced</small></div>
+            <div class="node"><b>Shell & files</b><small>Advanced · 92%</small><span class="dots">●●●●○</span></div>
+            <div class="node"><b>Processes & signals</b><small>Advanced · 81%</small><span class="dots">●●●●○</span></div>
+            <div class="node"><b>Debugging tools</b><small>Intermediate · 76%</small><span class="dots">●●●○○</span></div>
+            <div class="node"><b>Cross-compilation</b><small>Intermediate · 58%</small><span class="dots">●●●○○</span></div>
+          </div>
+          <div class="lane"><div class="lane-head"><span>Networking</span><small>Intermediate</small></div>
+            <div class="node"><b>TCP/IP model</b><small>Advanced · 85%</small><span class="dots">●●●●○</span></div>
+            <div class="node"><b>Addressing</b><small>Intermediate · 73%</small><span class="dots">●●●○○</span></div>
+            <div class="node active"><b>Sockets</b><small>Intermediate · 69%</small><span class="dots">●●●○○</span></div>
+            <div class="node"><b>Packet diagnosis</b><small>Foundation · 55%</small><span class="dots">●●○○○</span></div>
+          </div>
+          <div class="lane"><div class="lane-head"><span>BSP</span><small>Basic</small></div>
+            <div class="node"><b>Boot sequence</b><small>Foundation · 61%</small><span class="dots">●●○○○</span></div>
+            <div class="node active"><b>Device tree</b><small>Basic · 47%</small><span class="dots">●○○○○</span></div>
+            <div class="node locked"><b>Driver model</b><small>Complete device tree basics</small></div>
+            <div class="node locked"><b>Board bring-up</b><small>Complete driver prerequisites</small></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
