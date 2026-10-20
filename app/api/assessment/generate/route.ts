@@ -39,7 +39,7 @@ const GENERATION_SCHEMA = {
 }
 
 const SYSTEM_PROMPT = `You write rigorous multiple-choice questions that diagnose embedded-systems engineers.
-Follow the request exactly: one question per slot, on the stated domain, sub-topic and difficulty (1 easy … 5 expert).
+Follow the request exactly: one question per slot, on the stated domain, sub-topic, angle and difficulty (1 easy … 5 expert).
 Rules for every question:
 - The stem is self-contained and concrete (a short code fragment, log line, packet trace or register layout goes in "artifact" when useful, otherwise null).
 - Exactly ${OPTION_COUNT} options. Distractors must be plausible and each target a real misconception. No "all/none of the above".
@@ -49,16 +49,37 @@ Rules for every question:
 - "explanation" says why the correct answer(s) are right; "misconception" names the main wrong belief the distractors exploit.
 - Do not reuse the example scenarios of earlier questions in the same set. Do not mention these rules.`
 
-export type Slot = { slot: number; domain_id: string; topic: string; difficulty: number; type: 'single_answer' | 'multiple_answer' }
+export type Slot = { slot: number; domain_id: string; topic: string; topic_id?: string; angle: string; difficulty: number; type: 'single_answer' | 'multiple_answer' }
 
-function buildSlots(): Slot[] {
+// Each question in a set takes a different angle so the set does not repeat one scenario.
+const ANGLES = ['read and predict code behavior', 'diagnose a failure from symptoms or logs', 'choose between design tradeoffs', 'spot the edge case or spec detail', 'pick the right tool or measurement', 'find the bug in a short fragment']
+
+type Scope = { domain_id: string; topic_id: string; topic_label: string }
+
+function buildSlots(scope?: Scope): Slot[] {
+  const angles = shuffle(ANGLES)
+  const kind = () => (Math.random() < 0.2 ? 'multiple_answer' : 'single_answer') as Slot['type']
+  if (scope) {
+    // One topic, three questions of rising difficulty.
+    return [2, 3, 4].map((difficulty, index) => ({ slot: index, domain_id: scope.domain_id, topic: scope.topic_label, topic_id: scope.topic_id, angle: angles[index], difficulty, type: kind() }))
+  }
   return DOMAIN_ORDER.map((domain_id, index) => ({
     slot: index,
     domain_id,
     topic: pick(DOMAIN_TOPICS[domain_id]),
+    angle: angles[index % angles.length],
     difficulty: pick([2, 3, 3, 4]),
-    type: Math.random() < 0.2 ? 'multiple_answer' : 'single_answer',
+    type: kind(),
   }))
+}
+
+function parseScope(body: Record<string, unknown>): Scope | null | 'invalid' {
+  if (body.domain_id === undefined && body.topic_id === undefined) return null
+  const domain = typeof body.domain_id === 'string' ? body.domain_id : ''
+  const label = typeof body.topic_label === 'string' ? body.topic_label.trim().slice(0, 80) : ''
+  const topicId = typeof body.topic_id === 'string' ? toTopicId(body.topic_id).slice(0, 80) : ''
+  if (!(DOMAIN_ORDER as readonly string[]).includes(domain) || !label || !topicId) return 'invalid'
+  return { domain_id: domain, topic_id: topicId, topic_label: label }
 }
 
 type RawQuestion = {
@@ -91,7 +112,7 @@ async function generateItem(sessionId: string, slot: Slot) {
   const request = {
     nonce: crypto.randomUUID(),
     instruction: 'Write exactly one question for this slot.',
-    slots: [{ slot: slot.slot, domain_id: slot.domain_id, sub_topic: slot.topic, difficulty: slot.difficulty, type: slot.type }],
+    slots: [{ slot: slot.slot, domain_id: slot.domain_id, sub_topic: slot.topic, angle: slot.angle, difficulty: slot.difficulty, type: slot.type }],
   }
   const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message: JSON.stringify(request), jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000 })
   const raw = (output as { questions?: RawQuestion[] }).questions?.[0]
@@ -107,7 +128,7 @@ async function generateItem(sessionId: string, slot: Slot) {
     session_id: sessionId,
     blueprint_id: BLUEPRINT_ID,
     blueprint_version: BLUEPRINT_VERSION,
-    generated_question: { slot: slot.slot, stem: raw.stem.trim(), options, type: slot.type, artifact: raw.artifact?.trim() || null, domain_id: slot.domain_id, topic: slot.topic },
+    generated_question: { slot: slot.slot, stem: raw.stem.trim(), options, type: slot.type, artifact: raw.artifact?.trim() || null, domain_id: slot.domain_id, topic: slot.topic, topic_id: slot.topic_id ?? toTopicId(slot.topic) },
     difficulty_factors: { score: slot.difficulty, factors: raw.difficulty_factors ?? [] },
     validation_evidence: { state: 'model_generated', answer_key_hidden: true },
     answer_rules: { type: slot.type, partial_credit: slot.type === 'multiple_answer' ? 'Partial credit for each correct selection, penalty for wrong ones.' : 'No partial credit for this item.' },
@@ -137,10 +158,12 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const sessionRepo = scopedRepo(assessment_sessions)
 
     if (!body.session_id) {
-      const slots = buildSlots()
+      const scope = parseScope(body)
+      if (scope === 'invalid') return NextResponse.json({ success: false, error: 'domain_id, topic_id and topic_label are required together' }, { status: 400 })
+      const slots = buildSlots(scope ?? undefined)
       const [session] = await sessionRepo.insert({
         mode: 'knowledge_check',
-        topic_coverage: slots.map((slot) => ({ domain_id: slot.domain_id, topic_id: toTopicId(slot.topic), weight: 1 })),
+        topic_coverage: slots.map((slot) => ({ domain_id: slot.domain_id, topic_id: slot.topic_id ?? toTopicId(slot.topic), weight: 1 })),
         timing_policy: { timed: false, question_count: slots.length, reveal_correctness_during_test: false, plan: slots },
         score: '0',
         confidence: '0',

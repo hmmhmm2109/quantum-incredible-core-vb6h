@@ -28,7 +28,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const key = (item?.review_snapshot as { answer_key?: AnswerKey } | undefined)?.answer_key
     if (!item || !key?.correct_options?.length) return NextResponse.json({ success: false, error: 'Assessment item not found' }, { status: 404 })
 
-    const question = item.generated_question as { stem?: string; options?: string[]; type?: string; domain_id?: string; topic?: string }
+    const question = item.generated_question as { stem?: string; options?: string[]; type?: string; domain_id?: string; topic?: string; topic_id?: string }
     const options = question.options ?? []
     const chosen = [...new Set(selected.filter((value) => options.includes(value)))]
     if (chosen.length === 0) return NextResponse.json({ success: false, error: 'Selected answers do not match this question' }, { status: 400 })
@@ -41,7 +41,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
 
     const difficulty = (item.difficulty_factors as { score?: number; factors?: string[] } | undefined) ?? {}
     const domainId = question.domain_id ?? 'c'
-    const topicId = slug(question.topic ?? 'general')
+    const topicId = question.topic_id ?? slug(question.topic ?? 'general')
     const confidence = CONFIDENCE[String(body.confidence ?? '').toLowerCase()] ?? 0.5
     const levelBand = (difficulty.score ?? 3) >= 4 ? 'Advanced' : (difficulty.score ?? 3) >= 3 ? 'Intermediate' : 'Basic'
     const justification = typeof body.justification === 'string' ? body.justification.trim() : ''

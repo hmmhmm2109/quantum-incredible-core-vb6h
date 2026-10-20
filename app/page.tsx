@@ -154,6 +154,18 @@ const SAMPLE_QUESTIONS: AssessmentQuestion[] = [
   { stem: 'Which evidence is sufficient to claim a generated embedded fix is safe for production hardware?', options: ['A passing local unit test', 'Human review plus hardware-specific validation', 'A confident explanation from the coach'], type: 'single_answer' },
 ]
 
+const DOMAIN_TOPIC_OPTIONS = [
+  { id: 'c', label: 'C', topics: [{ id: 'types-control-flow', label: 'Types & control flow' }, { id: 'pointers-bounds', label: 'Pointers & bounds' }, { id: 'memory-lifetime', label: 'Memory & lifetime' }, { id: 'bit-operations', label: 'Bit operations' }, { id: 'concurrency', label: 'Concurrency' }] },
+  { id: 'cpp', label: 'C++', topics: [{ id: 'core-language', label: 'Core language' }, { id: 'raii-lifetime', label: 'RAII & lifetime' }, { id: 'stl-algorithms', label: 'STL & algorithms' }, { id: 'templates', label: 'Templates' }, { id: 'concurrency', label: 'Concurrency' }] },
+  { id: 'linux', label: 'Linux', topics: [{ id: 'shell-files', label: 'Shell & files' }, { id: 'processes-signals', label: 'Processes & signals' }, { id: 'debugging-tools', label: 'Debugging tools' }, { id: 'system-calls', label: 'System calls' }, { id: 'cross-compilation', label: 'Cross-compilation' }] },
+  { id: 'networking', label: 'Networking', topics: [{ id: 'tcp-ip-model', label: 'TCP/IP model' }, { id: 'addressing', label: 'Addressing & subnetting' }, { id: 'sockets', label: 'Sockets' }, { id: 'packet-diagnosis', label: 'Packet diagnosis' }, { id: 'routing-dns', label: 'Routing & DNS' }] },
+  { id: 'bsp', label: 'BSP', topics: [{ id: 'boot-sequence', label: 'Boot sequence' }, { id: 'device-tree', label: 'Device tree' }, { id: 'drivers', label: 'Driver model' }, { id: 'linker-memory-map', label: 'Linker scripts & memory maps' }, { id: 'board-bring-up', label: 'Board bring-up' }] },
+]
+
+function topicLabel(domainId: string, topicId: string) {
+  return DOMAIN_TOPIC_OPTIONS.find((domain) => domain.id === domainId)?.topics.find((topic) => topic.id === topicId)?.label ?? topicId.replaceAll('-', ' ')
+}
+
 const SAMPLE_CLAUDE: ClaudeState = {
   available: true,
   status: 'ready',
@@ -290,6 +302,7 @@ function EmbedPathApp() {
   const [confidence, setConfidence] = useState('')
   const [selectedAnswers, setSelectedAnswers] = useState<string[]>([])
   const [assessmentIndex, setAssessmentIndex] = useState(0)
+  const [assessmentScope, setAssessmentScope] = useState<{ domainId: string; topicId: string } | null>(null)
   const [review, setReview] = useState<ReviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -366,7 +379,7 @@ function EmbedPathApp() {
 
   const clearWorkspace = () => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); setStatusMessage(null); setAssessmentIndex(0) }
   const openPractice = (activity = activeActivity) => { setSelectedActivity(activity); setHints(sampleData ? SAMPLE_HINTS : []); clearWorkspace(); setView('practice') }
-  const postGenerate = async (payload?: { session_id: string; slot: number }) => {
+  const postGenerate = async (payload?: { session_id: string; slot: number } | { domain_id: string; topic_id: string; topic_label: string }) => {
     const response = await authFetch('/api/assessment/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) })
     const body: unknown = await response.json().catch(() => null)
     const record = recordValue(body)
@@ -391,18 +404,19 @@ function EmbedPathApp() {
     }
     await Promise.all([worker(), worker()])
   }
-  const openAssessment = async () => {
+  const startAssessment = async (scope: { domainId: string; topicId: string } | null) => {
     if (generating) return
     setGenerating(true)
-    const toastId = toast.loading('Claude is writing your first question…')
+    const toastId = toast.loading(scope ? `Claude is writing your ${topicLabel(scope.domainId, scope.topicId)} question…` : 'Claude is writing your first question…')
     try {
-      const data = await postGenerate()
+      const data = await postGenerate(scope ? { domain_id: scope.domainId, topic_id: scope.topicId, topic_label: topicLabel(scope.domainId, scope.topicId) } : undefined)
       const session = recordValue(data.session)
       const items = arrayValue(data.items).filter(isRecord)
       const sessionId = stringValue(session.id)
       const total = Math.max(numberValue(session.total, items.length), items.length)
       if (items.length === 0 || !sessionId) throw new Error('Claude returned no questions.')
       setGenerated({ sessionId, total, items, coverage: arrayValue(session.topic_coverage).filter(isRecord).map((item) => ({ domain_id: stringValue(item.domain_id), topic_id: stringValue(item.topic_id), weight: numberValue(item.weight) })) })
+      setAssessmentScope(scope)
       setWaitingNext(false)
       clearWorkspace()
       setView('assessment')
@@ -414,6 +428,8 @@ function EmbedPathApp() {
       setGenerating(false)
     }
   }
+  const openAssessment = () => startAssessment(null)
+  const openTopicAssessment = (domainId: string, topicId: string) => startAssessment({ domainId, topicId })
   const advanceAssessment = () => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); setAssessmentIndex((index) => index + 1) }
   const handleNextAssessment = () => {
     if (!generated) { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); setAssessmentIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)); return }
@@ -449,6 +465,20 @@ function EmbedPathApp() {
     } finally {
       setActiveAgentId(null)
     }
+  }
+  const startTopicLesson = async (domainId: string, topicId: string) => {
+    setLoading(true)
+    setAssessmentScope(null)
+    const label = topicLabel(domainId, topicId)
+    const result = await requestCoach(`request_type: lecture_request\ndomain_id: ${domainId}\ntopic_id: ${topicId}\nselected_topic_only: true\nteaching_order: theory explanation -> guided worked example -> quick retrieval check -> focused practice exercise\nGenerate an adaptive lesson for ${label}. Do not mix in other topics except explicitly named prerequisites. Return the complete structured response schema. The lecture must be the primary content; include the follow-up exercise in activity but do not ask the learner to solve it before the explanation.`)
+    if (result) {
+      setReview(result)
+      setSelectedActivity(result.activity)
+      setHints(result.hints)
+      setClaudeState(fallbackClaudeFromReview(result))
+      setView('review')
+    }
+    setLoading(false)
   }
   const persistAttempt = async (result: ReviewData) => {
     try {
@@ -490,7 +520,7 @@ function EmbedPathApp() {
   const handleTheme = () => setTheme((current) => current === 'dark' ? 'light' : 'dark')
   const handleSampleData = (checked: boolean) => { setSampleData(checked); if (!checked) toast.success('Sample examples removed. Saved data remains visible.'); else toast.success('Sample examples restored.') }
   const renderView = () => {
-    if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={() => openPractice()} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} />
+    if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={() => openPractice()} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} domainOptions={DOMAIN_TOPIC_OPTIONS} onStartLearningTopic={startTopicLesson} onStartAssessmentTopic={openTopicAssessment} topicActionLoading={loading} />
     if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => setAssessmentIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1))} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'review' && review) return <ResultSection data={review} onStartNext={() => openPractice()} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} loading={loading} statusMessage={statusMessage} />
