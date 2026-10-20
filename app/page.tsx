@@ -154,6 +154,25 @@ const SAMPLE_QUESTIONS: AssessmentQuestion[] = [
   { stem: 'Which evidence is sufficient to claim a generated embedded fix is safe for production hardware?', options: ['A passing local unit test', 'Human review plus hardware-specific validation', 'A confident explanation from the coach'], type: 'single_answer' },
 ]
 
+const DOMAIN_TOPIC_OPTIONS = [
+  { id: 'c', label: 'C', topics: [{ id: 'types-control-flow', label: 'Types & control flow' }, { id: 'pointers-bounds', label: 'Pointers & bounds' }, { id: 'memory-lifetime', label: 'Memory & lifetime' }, { id: 'bit-operations', label: 'Bit operations' }, { id: 'concurrency', label: 'Concurrency' }] },
+  { id: 'cpp', label: 'C++', topics: [{ id: 'core-language', label: 'Core language' }, { id: 'raii-lifetime', label: 'RAII & lifetime' }, { id: 'stl-algorithms', label: 'STL & algorithms' }, { id: 'templates', label: 'Templates' }, { id: 'concurrency', label: 'Concurrency' }] },
+  { id: 'linux', label: 'Linux', topics: [{ id: 'shell-files', label: 'Shell & files' }, { id: 'processes-signals', label: 'Processes & signals' }, { id: 'debugging-tools', label: 'Debugging tools' }, { id: 'system-calls', label: 'System calls' }, { id: 'cross-compilation', label: 'Cross-compilation' }] },
+  { id: 'networking', label: 'Networking', topics: [{ id: 'tcp-ip-model', label: 'TCP/IP model' }, { id: 'addressing', label: 'Addressing & subnetting' }, { id: 'sockets', label: 'Sockets' }, { id: 'packet-diagnosis', label: 'Packet diagnosis' }, { id: 'routing-dns', label: 'Routing & DNS' }] },
+  { id: 'bsp', label: 'BSP', topics: [{ id: 'boot-sequence', label: 'Boot sequence' }, { id: 'device-tree', label: 'Device tree' }, { id: 'drivers', label: 'Driver model' }, { id: 'linker-memory-map', label: 'Linker scripts & memory maps' }, { id: 'board-bring-up', label: 'Board bring-up' }] },
+]
+
+const TOPIC_QUESTIONS: Record<string, AssessmentQuestion> = {
+  'c:pointers-bounds': SAMPLE_QUESTIONS[0],
+  'linux:processes-signals': SAMPLE_QUESTIONS[1],
+  'networking:packet-diagnosis': SAMPLE_QUESTIONS[2],
+  'bsp:device-tree': SAMPLE_QUESTIONS[3],
+}
+
+function topicLabel(domainId: string, topicId: string) {
+  return DOMAIN_TOPIC_OPTIONS.find((domain) => domain.id === domainId)?.topics.find((topic) => topic.id === topicId)?.label ?? topicId.replaceAll('-', ' ')
+}
+
 const SAMPLE_CLAUDE: ClaudeState = {
   available: true,
   status: 'ready',
@@ -290,6 +309,7 @@ function EmbedPathApp() {
   const [confidence, setConfidence] = useState('')
   const [selectedAnswers, setSelectedAnswers] = useState<string[]>([])
   const [assessmentIndex, setAssessmentIndex] = useState(0)
+  const [assessmentScope, setAssessmentScope] = useState<{ domainId: string; topicId: string } | null>(null)
   const [review, setReview] = useState<ReviewData | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -351,10 +371,22 @@ function EmbedPathApp() {
     const metadata = recordValue(record?.activity_metadata)
     return record ? { title: stringValue(metadata.title, 'Continue your diagnostic'), description: stringValue(metadata.description, 'Use the coach to generate the next evidence-building activity.'), domain: stringValue(metadata.domain, 'Embedded systems'), topic: stringValue(metadata.topic, 'Mixed diagnostic'), level: stringValue(metadata.level_band, 'Basic'), format: stringValue(metadata.format, 'Diagnostic'), duration: numberValue(metadata.estimated_duration_minutes, 15), rationale: stringValue(record.rationale, 'The next task is selected from your current evidence.'), isReal: true } : { title: 'Start your mixed diagnostic', description: 'Answer a few varied questions so the coach can build an independent baseline for each domain.', domain: 'All domains', topic: 'Initial placement', level: 'Basic → Expert', format: 'Assessment', duration: 12, rationale: 'No saved recommendation exists yet. A diagnostic creates the evidence needed for an adaptive path.', isReal: false }
   }, [sampleData, saved.recommendations])
-  const assessmentQuestions = useMemo(() => { if (sampleData) return SAMPLE_QUESTIONS; const normalized = saved.assessmentItems.map(normalizeQuestion).filter((item): item is AssessmentQuestion => item !== null); return normalized.length > 0 ? normalized : SAMPLE_QUESTIONS.slice(0, 1) }, [sampleData, saved.assessmentItems])
+  const assessmentQuestions = useMemo(() => {
+    if (assessmentScope) {
+      const key = `${assessmentScope.domainId}:${assessmentScope.topicId}`
+      return [TOPIC_QUESTIONS[key] ?? { stem: `Which statement best demonstrates practical understanding of ${topicLabel(assessmentScope.domainId, assessmentScope.topicId)}?`, options: ['Explain the governing rule and apply it to a concrete scenario', 'Memorize one output without explaining why', 'Ignore prerequisites and choose the longest answer'], type: 'single_answer' }]
+    }
+    if (sampleData) return SAMPLE_QUESTIONS
+    const normalized = saved.assessmentItems.map(normalizeQuestion).filter((item): item is AssessmentQuestion => item !== null)
+    return normalized.length > 0 ? normalized : SAMPLE_QUESTIONS.slice(0, 1)
+  }, [sampleData, saved.assessmentItems, assessmentScope])
   const assessmentQuestion = assessmentQuestions[Math.min(assessmentIndex, assessmentQuestions.length - 1)] ?? SAMPLE_QUESTIONS[0]
   const assessmentSession = saved.assessmentSessions[0]
-  const assessmentCoverage = useMemo(() => { if (sampleData) return SAMPLE_DOMAINS.map((domain) => ({ domain_id: domain.id, topic_id: domain.focus.toLowerCase().replaceAll(' ', '-'), weight: 1 })); const coverage = arrayValue(assessmentSession?.topic_coverage).filter(isRecord).map((item) => ({ domain_id: stringValue(item.domain_id), topic_id: stringValue(item.topic_id), weight: numberValue(item.weight) })); return coverage }, [sampleData, assessmentSession])
+  const assessmentCoverage = useMemo(() => {
+    if (assessmentScope) return [{ domain_id: assessmentScope.domainId, topic_id: assessmentScope.topicId, weight: 1 }]
+    if (sampleData) return SAMPLE_DOMAINS.map((domain) => ({ domain_id: domain.id, topic_id: domain.focus.toLowerCase().replaceAll(' ', '-'), weight: 1 }))
+    return arrayValue(assessmentSession?.topic_coverage).filter(isRecord).map((item) => ({ domain_id: stringValue(item.domain_id), topic_id: stringValue(item.topic_id), weight: numberValue(item.weight) }))
+  }, [sampleData, assessmentSession, assessmentScope])
   const assessmentMeta = useMemo(() => { if (sampleData) return { mode: 'knowledge_check', blueprint_id: 'mixed-diagnostic-v1', blueprint_version: 'v1.0.0', calibrated_difficulty: { score: 2, factors: ['prerequisite depth', 'reasoning steps'] }, validation_state: 'valid', answer_rules: { type: 'single_answer', partial_credit: 'Written reasoning contributes confidence, not answer-key credit.' }, mastery_impact_cap: { max_level_band_delta: 1, max_score_delta: 8 } }; const item = saved.assessmentItems[0]; const rules = recordValue(item?.answer_rules); return { mode: stringValue(assessmentSession?.mode, 'knowledge_check'), blueprint_id: nullableString(item?.blueprint_id), blueprint_version: nullableString(item?.blueprint_version), calibrated_difficulty: { score: numberValue(recordValue(item?.difficulty_factors).score, 2), factors: arrayValue(recordValue(item?.difficulty_factors).factors).filter((line): line is string => typeof line === 'string') }, validation_state: stringValue(recordValue(item?.validation_evidence).state, 'pending'), answer_rules: { type: stringValue(rules.type, 'single_answer'), partial_credit: stringValue(rules.partial_credit) }, mastery_impact_cap: { max_level_band_delta: 1, max_score_delta: 8 } } }, [sampleData, assessmentSession, saved.assessmentItems])
   const skillDomains = useMemo<SkillDomain[]>(() => {
     if (sampleData) return SAMPLE_DOMAINS.map((domain) => ({ id: domain.id, label: domain.label, level: domain.level, score: domain.score, isReal: false, topics: domain.id === 'c' ? [{ id: 'types-control-flow', label: 'Types & control flow', score: 91, level: 'Advanced', confidence: 0.91, state: 'ready', detail: 'Strong evidence from output prediction and implementation tasks.', evidence: ['Explained integer conversions in two formats.', 'Passed a control-flow repair exercise.'], prerequisite: null, isReal: false }, { id: 'pointers-bounds', label: 'Pointers & bounds', score: 64, level: 'Intermediate', confidence: 0.78, state: 'active', detail: 'Bounds checks are improving; the next exercise targets validation order.', evidence: ['Strong pointer arithmetic in the last attempt.', 'Two recent misses on truncated headers.'], prerequisite: null, isReal: false }, { id: 'memory-lifetime', label: 'Memory & lifetime', score: 55, level: 'Intermediate', confidence: 0.64, state: 'ready', detail: 'Review ownership and allocation tradeoffs before concurrency.', evidence: ['Identified one leak in a code review.'], prerequisite: null, isReal: false }, { id: 'concurrency', label: 'Concurrency', score: 0, level: 'Locked', confidence: 0, state: 'locked', detail: 'Complete memory prerequisites first.', evidence: [], prerequisite: 'Complete memory & lifetime', isReal: false }] : [{ id: `${domain.id}-core`, label: domain.focus, score: domain.score, level: domain.level, confidence: domain.confidence, state: 'active', detail: `Your ${domain.label} track is ready for a focused diagnostic.`, evidence: ['Sample evidence is shown until you complete the mixed diagnostic.'], prerequisite: null, isReal: false }, { id: `${domain.id}-next`, label: domain.id === 'bsp' ? 'Board bring-up' : 'Applied diagnosis', score: Math.max(0, domain.score - 12), level: domain.level, confidence: Math.max(0.35, domain.confidence - 0.1), state: 'ready', detail: 'A related transfer task will strengthen this path.', evidence: [], prerequisite: null, isReal: false }] }))
@@ -363,7 +395,8 @@ function EmbedPathApp() {
 
   const clearWorkspace = () => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); setStatusMessage(null); setAssessmentIndex(0) }
   const openPractice = (activity = activeActivity) => { setSelectedActivity(activity); setHints(sampleData ? SAMPLE_HINTS : []); clearWorkspace(); setView('practice') }
-  const openAssessment = () => { clearWorkspace(); setView('assessment') }
+  const openAssessment = () => { setAssessmentScope(null); clearWorkspace(); setView('assessment') }
+  const openTopicAssessment = (domainId: string, topicId: string) => { setAssessmentScope({ domainId, topicId }); clearWorkspace(); setView('assessment') }
   const requestCoach = async (message: string) => {
     setActiveAgentId(CLAUDE_RUNTIME)
     try {
@@ -388,6 +421,20 @@ function EmbedPathApp() {
       setActiveAgentId(null)
     }
   }
+  const startTopicLesson = async (domainId: string, topicId: string) => {
+    setLoading(true)
+    setAssessmentScope(null)
+    const label = topicLabel(domainId, topicId)
+    const result = await requestCoach(`request_type: lecture_request\ndomain_id: ${domainId}\ntopic_id: ${topicId}\nselected_topic_only: true\nteaching_order: theory explanation -> guided worked example -> quick retrieval check -> focused practice exercise\nGenerate an adaptive lesson for ${label}. Do not mix in other topics except explicitly named prerequisites. Return the complete structured response schema. The lecture must be the primary content; include the follow-up exercise in activity but do not ask the learner to solve it before the explanation.`)
+    if (result) {
+      setReview(result)
+      setSelectedActivity(result.activity)
+      setHints(result.hints)
+      setClaudeState(fallbackClaudeFromReview(result))
+      setView('review')
+    }
+    setLoading(false)
+  }
   const persistAttempt = async (result: ReviewData) => {
     try {
       const response = await authFetch('/api/attempts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activity_id: result.activity.id || selectedActivity.id || 'coach-activity', response: { answer: answerText, justification }, execution_result: { feedback: result.feedback.public_test_feedback, claude_cli: result.claude_cli }, score: result.feedback.correctness.score, hint_count: result.hints.filter((hint) => hint.revealed).length, feedback: { summary: result.feedback.summary, domain: result.activitySummary, format: result.request_type }, completion_state: 'completed' }) })
@@ -407,7 +454,9 @@ function EmbedPathApp() {
   const submitAssessment = async () => {
     if (!answerText.trim() && selectedAnswers.length === 0) return
     setLoading(true); setStatusMessage(null)
-    const result = await requestCoach(`request_type: assessment_submission\nmode: ${assessmentMeta.mode}\nquestion_index: ${assessmentIndex + 1}\nquestion: ${assessmentQuestion.stem}\nselected_answers: ${selectedAnswers.join(' | ') || answerText}\nconfidence: ${confidence || 'not supplied'}\nwritten justification: ${justification}\nassessment metadata: ${JSON.stringify(assessmentMeta)}\nDo not reveal correctness during the active assessment. After submission, return the complete structured review with valid or excluded items, misconception analysis, bounded mastery impact, explanations, remediation, and the pending Claude CLI bridge state.`)
+    const scopedDomain = assessmentScope?.domainId ?? assessmentCoverage[0]?.domain_id ?? 'unknown'
+    const scopedTopic = assessmentScope?.topicId ?? assessmentCoverage[0]?.topic_id ?? 'unknown'
+    const result = await requestCoach(`request_type: assessment_submission\nmode: ${assessmentMeta.mode}\ndomain_id: ${scopedDomain}\ntopic_id: ${scopedTopic}\nselected_topic_only: true\nquestion_index: ${assessmentIndex + 1}\nquestion: ${assessmentQuestion.stem}\nselected_answers: ${selectedAnswers.join(' | ') || answerText}\nconfidence: ${confidence || 'not supplied'}\nwritten justification: ${justification}\nassessment metadata: ${JSON.stringify(assessmentMeta)}\nEvaluate only ${scopedDomain}/${scopedTopic}. Do not mix evidence or questions from another topic. Do not reveal correctness during the active assessment. After submission, return the complete structured review with valid or excluded items, misconception analysis, bounded mastery impact, explanations, and remediation.`)
     if (result) { setReview(result); setHints(result.hints); setClaudeState(fallbackClaudeFromReview(result)); setView('review'); try { const response = await authFetch('/api/assessment_responses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: `assessment-item-${assessmentIndex + 1}`, session_id: stringValue(assessmentSession?.id, 'assessment-session'), selected_answers: selectedAnswers.length > 0 ? selectedAnswers : [answerText], justification, response_time_ms: 0, partial_credit: result.assessment.score.earned, feedback: result.feedback, challenge_state: 'completed', mastery_evidence: result.mastery_evidence }) }); const body: unknown = await response.json(); if (!response.ok || !isRecord(body) || body.success !== true) throw new Error(isRecord(body) ? stringValue(body.error, 'Assessment response could not be saved.') : 'Assessment response could not be saved.'); toast.success('Assessment response saved.') } catch (error) { toast.error(error instanceof Error ? error.message : 'Assessment response could not be saved.') } }
     setLoading(false)
   }
@@ -424,7 +473,7 @@ function EmbedPathApp() {
   const handleTheme = () => setTheme((current) => current === 'dark' ? 'light' : 'dark')
   const handleSampleData = (checked: boolean) => { setSampleData(checked); if (!checked) toast.success('Sample examples removed. Saved data remains visible.'); else toast.success('Sample examples restored.') }
   const renderView = () => {
-    if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={() => openPractice()} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} />
+    if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={() => openPractice()} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} domainOptions={DOMAIN_TOPIC_OPTIONS} onStartLearningTopic={startTopicLesson} onStartAssessmentTopic={openTopicAssessment} topicActionLoading={loading} />
     if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={assessmentIndex} assessmentTotal={assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => setAssessmentIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1))} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={assessmentIndex} assessmentTotal={assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={() => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); setAssessmentIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)) }} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'review' && review) return <ResultSection data={review} onStartNext={() => openPractice()} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} loading={loading} statusMessage={statusMessage} />

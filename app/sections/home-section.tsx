@@ -1,6 +1,8 @@
 'use client'
 
-import { ArrowRight, BrainCircuit, CheckCircle2, Clock3, Code2, Compass, FlaskConical, LockKeyhole, Sparkles, Target, TerminalSquare } from 'lucide-react'
+import { useState } from 'react'
+
+import { ArrowRight, BookOpenCheck, BrainCircuit, CheckCircle2, Clock3, Code2, Compass, FlaskConical, LockKeyhole, Sparkles, Target, TerminalSquare } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -37,6 +39,9 @@ export type HomeRecommendation = {
   isReal: boolean
 }
 
+type TopicOption = { id: string; label: string }
+type DomainOption = { id: string; label: string; topics: TopicOption[] }
+
 type HomeSectionProps = {
   displayName: string
   dateLabel: string
@@ -49,6 +54,10 @@ type HomeSectionProps = {
   onOpenSkillMap: () => void
   onOpenHistory: () => void
   onStartAssessment: () => void
+  domainOptions: DomainOption[]
+  onStartLearningTopic: (domainId: string, topicId: string) => void
+  onStartAssessmentTopic: (domainId: string, topicId: string) => void
+  topicActionLoading: boolean
 }
 
 const levelTone: Record<string, string> = {
@@ -75,7 +84,19 @@ export default function HomeSection({
   onOpenSkillMap,
   onOpenHistory,
   onStartAssessment,
+  domainOptions,
+  onStartLearningTopic,
+  onStartAssessmentTopic,
+  topicActionLoading,
 }: HomeSectionProps) {
+  const [learnDomain, setLearnDomain] = useState(domainOptions[0]?.id ?? '')
+  const [learnTopic, setLearnTopic] = useState(domainOptions[0]?.topics[0]?.id ?? '')
+  const [assessmentDomain, setAssessmentDomain] = useState(domainOptions[0]?.id ?? '')
+  const [assessmentTopic, setAssessmentTopic] = useState(domainOptions[0]?.topics[0]?.id ?? '')
+  const learnTopics = domainOptions.find((domain) => domain.id === learnDomain)?.topics ?? []
+  const assessmentTopics = domainOptions.find((domain) => domain.id === assessmentDomain)?.topics ?? []
+  const changeLearnDomain = (value: string) => { setLearnDomain(value); setLearnTopic(domainOptions.find((domain) => domain.id === value)?.topics[0]?.id ?? '') }
+  const changeAssessmentDomain = (value: string) => { setAssessmentDomain(value); setAssessmentTopic(domainOptions.find((domain) => domain.id === value)?.topics[0]?.id ?? '') }
   return (
     <div className="mx-auto w-full max-w-6xl space-y-8 pb-10">
       <div className="flex flex-col gap-5 border-b border-border/70 pb-7 sm:flex-row sm:items-end sm:justify-between">
@@ -106,6 +127,17 @@ export default function HomeSection({
           <div><span className="font-semibold">Saved data is unavailable.</span> {dataError} You can still explore the sample path, then retry.</div>
         </div>
       )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="rounded-3xl border-border/70 shadow-sm">
+          <CardHeader><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Learn a topic</div><CardTitle className="mt-2 flex items-center gap-2 text-xl"><BookOpenCheck className="h-5 w-5 text-primary" />Theory before practice</CardTitle></CardHeader>
+          <CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">Choose one topic. Claude CLI generates the explanation, guided example, quick check, then a focused exercise.</p><div className="grid gap-3 sm:grid-cols-2"><select aria-label="Learning domain" value={learnDomain} onChange={(event) => changeLearnDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Learning topic" value={learnTopic} onChange={(event) => setLearnTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{learnTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div><Button disabled={topicActionLoading || !learnTopic} onClick={() => onStartLearningTopic(learnDomain, learnTopic)} className="min-h-11 w-full gap-2 rounded-xl"><BookOpenCheck className="h-4 w-4" />{topicActionLoading ? 'Preparing lesson…' : 'Start lesson'}</Button></CardContent>
+        </Card>
+        <Card className="rounded-3xl border-border/70 shadow-sm">
+          <CardHeader><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Assess one topic</div><CardTitle className="mt-2 flex items-center gap-2 text-xl"><Target className="h-5 w-5 text-primary" />Topic-only assessment</CardTitle></CardHeader>
+          <CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">This selection is independent from learning. Questions and mastery evidence stay inside the chosen topic.</p><div className="grid gap-3 sm:grid-cols-2"><select aria-label="Assessment domain" value={assessmentDomain} onChange={(event) => changeAssessmentDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Assessment topic" value={assessmentTopic} onChange={(event) => setAssessmentTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{assessmentTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div><Button disabled={!assessmentTopic} onClick={() => onStartAssessmentTopic(assessmentDomain, assessmentTopic)} variant="outline" className="min-h-11 w-full gap-2 rounded-xl"><BrainCircuit className="h-4 w-4" />Start topic assessment</Button></CardContent>
+        </Card>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.55fr_0.95fr]">
         <Card className="overflow-hidden rounded-3xl border-border/70 bg-card shadow-sm">
