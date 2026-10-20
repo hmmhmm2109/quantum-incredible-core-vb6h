@@ -68,3 +68,9 @@ export const COACH_RESULT_SCHEMA: Schema = obj({
     stdout: str, stderr: str, changed_files: arr(obj({ path: str, change: str })),
   }),
 })
+
+// Smaller schemas for /api/lesson: the lecture and the practice exercise are generated separately,
+// so the learner can start reading before the exercise exists.
+const coachProperties = COACH_RESULT_SCHEMA.properties as Record<string, Schema>
+export const LECTURE_SCHEMA: Schema = obj({ lecture: coachProperties.lecture, learner_explanation: str })
+export const PRACTICE_SCHEMA: Schema = obj({ activity: coachProperties.activity, hints: coachProperties.hints })

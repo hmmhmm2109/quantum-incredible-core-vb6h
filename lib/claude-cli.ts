@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 2_000_000
 const MAX_CONCURRENT = 4
-const MODEL = 'claude-sonnet-5-5'
+export const MODEL = 'claude-sonnet-5-5'
 
 let active = 0
 

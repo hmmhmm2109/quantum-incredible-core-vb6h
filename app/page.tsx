@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   Activity,
@@ -55,6 +55,7 @@ import HomeSection, { type HomeAttempt, type HomeDomain, type HomeRecommendation
 import PracticeSection, { type AssessmentQuestion, type PracticeActivity } from '@/app/sections/practice-section'
 import ResultSection, { type ReviewData } from '@/app/sections/result-section'
 import SkillMapSection, { type SkillDomain, type SkillTopic } from '@/app/sections/skill-map-section'
+import { DOMAIN_TOPIC_OPTIONS, topicLabel } from '@/lib/learning-topics'
 
 const CLAUDE_RUNTIME = 'claude-cli-oauth'
 
@@ -153,18 +154,6 @@ const SAMPLE_QUESTIONS: AssessmentQuestion[] = [
   { stem: 'A device-tree node names a UART but the boot log shows no mapped register range. What is the most useful next check?', options: ['Compare reg and address-cells against the SoC memory map', 'Increase the baud rate immediately', 'Disable all interrupts'], type: 'single_answer' },
   { stem: 'Which evidence is sufficient to claim a generated embedded fix is safe for production hardware?', options: ['A passing local unit test', 'Human review plus hardware-specific validation', 'A confident explanation from the coach'], type: 'single_answer' },
 ]
-
-const DOMAIN_TOPIC_OPTIONS = [
-  { id: 'c', label: 'C', topics: [{ id: 'types-control-flow', label: 'Types & control flow' }, { id: 'pointers-bounds', label: 'Pointers & bounds' }, { id: 'memory-lifetime', label: 'Memory & lifetime' }, { id: 'bit-operations', label: 'Bit operations' }, { id: 'concurrency', label: 'Concurrency' }] },
-  { id: 'cpp', label: 'C++', topics: [{ id: 'core-language', label: 'Core language' }, { id: 'raii-lifetime', label: 'RAII & lifetime' }, { id: 'stl-algorithms', label: 'STL & algorithms' }, { id: 'templates', label: 'Templates' }, { id: 'concurrency', label: 'Concurrency' }] },
-  { id: 'linux', label: 'Linux', topics: [{ id: 'shell-files', label: 'Shell & files' }, { id: 'processes-signals', label: 'Processes & signals' }, { id: 'debugging-tools', label: 'Debugging tools' }, { id: 'system-calls', label: 'System calls' }, { id: 'cross-compilation', label: 'Cross-compilation' }] },
-  { id: 'networking', label: 'Networking', topics: [{ id: 'tcp-ip-model', label: 'TCP/IP model' }, { id: 'addressing', label: 'Addressing & subnetting' }, { id: 'sockets', label: 'Sockets' }, { id: 'packet-diagnosis', label: 'Packet diagnosis' }, { id: 'routing-dns', label: 'Routing & DNS' }] },
-  { id: 'bsp', label: 'BSP', topics: [{ id: 'boot-sequence', label: 'Boot sequence' }, { id: 'device-tree', label: 'Device tree' }, { id: 'drivers', label: 'Driver model' }, { id: 'linker-memory-map', label: 'Linker scripts & memory maps' }, { id: 'board-bring-up', label: 'Board bring-up' }] },
-]
-
-function topicLabel(domainId: string, topicId: string) {
-  return DOMAIN_TOPIC_OPTIONS.find((domain) => domain.id === domainId)?.topics.find((topic) => topic.id === topicId)?.label ?? topicId.replaceAll('-', ' ')
-}
 
 const SAMPLE_CLAUDE: ClaudeState = {
   available: true,
@@ -378,7 +367,7 @@ function EmbedPathApp() {
   }, [sampleData, saved.mastery])
 
   const clearWorkspace = () => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); setStatusMessage(null); setAssessmentIndex(0) }
-  const openPractice = (activity = activeActivity) => { setSelectedActivity(activity); setHints(sampleData ? SAMPLE_HINTS : []); clearWorkspace(); setView('practice') }
+  const openPractice = (activity = activeActivity) => { lessonRef.current = null; setSelectedActivity(activity); setHints(sampleData ? SAMPLE_HINTS : []); clearWorkspace(); setView('practice') }
   const postGenerate = async (payload?: { session_id: string; slot: number } | { domain_id: string; topic_id: string; topic_label: string }) => {
     const response = await authFetch('/api/assessment/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) })
     const body: unknown = await response.json().catch(() => null)
@@ -466,17 +455,27 @@ function EmbedPathApp() {
       setActiveAgentId(null)
     }
   }
+  // The lecture comes back first (cached per topic, so repeat visits are instant); the practice exercise is fetched in the background.
+  const lessonRef = useRef<string | null>(null)
+  const loadLessonPractice = async (domainId: string, topicId: string, lessonId: string) => {
+    const practice = await requestCoach('', undefined, { url: '/api/lesson', body: { domain_id: domainId, topic_id: topicId, part: 'practice' } })
+    if (!practice || lessonRef.current !== lessonId) return
+    setSelectedActivity(practice.activity)
+    setHints(practice.hints)
+  }
   const startTopicLesson = async (domainId: string, topicId: string) => {
     setLoading(true)
     setAssessmentScope(null)
-    const label = topicLabel(domainId, topicId)
-    const result = await requestCoach(`request_type: lecture_request\ndomain_id: ${domainId}\ntopic_id: ${topicId}\nselected_topic_only: true\nteaching_order: theory explanation -> guided worked example -> quick retrieval check -> focused practice exercise\nGenerate an adaptive lesson for ${label}. Do not mix in other topics except explicitly named prerequisites. Return the complete structured response schema. The lecture must be the primary content; include the follow-up exercise in activity but do not ask the learner to solve it before the explanation.`)
+    const lessonId = `lesson-${domainId}-${topicId}`
+    lessonRef.current = lessonId
+    const result = await requestCoach('', undefined, { url: '/api/lesson', body: { domain_id: domainId, topic_id: topicId, part: 'lecture' } })
     if (result) {
       setReview(result)
       setSelectedActivity(result.activity)
       setHints(result.hints)
       setClaudeState(fallbackClaudeFromReview(result))
       setView('review')
+      void loadLessonPractice(domainId, topicId, lessonId)
     }
     setLoading(false)
   }
@@ -523,7 +522,7 @@ function EmbedPathApp() {
     if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={() => openPractice()} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} domainOptions={DOMAIN_TOPIC_OPTIONS} onStartLearningTopic={startTopicLesson} onStartAssessmentTopic={openTopicAssessment} topicActionLoading={loading} />
     if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => setAssessmentIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1))} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
-    if (view === 'review' && review) return <ResultSection data={review} onStartNext={() => openPractice()} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} loading={loading} statusMessage={statusMessage} />
+    if (view === 'review' && review) return <ResultSection data={review} onStartNext={() => openPractice(selectedActivity.id?.startsWith('lesson-') && selectedActivity.prompt ? selectedActivity : undefined)} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} loading={loading} statusMessage={statusMessage} />
     if (view === 'skill-map') return <SkillMapSection domains={skillDomains} sampleData={sampleData} loading={loading} onRetake={openAssessment} onPractice={handlePracticeFromSkillMap} onBack={() => setView('home')} />
     if (view === 'history') return <HistoryPanel attempts={homeAttempts} sampleData={sampleData} onBack={() => setView('home')} onPractice={() => openPractice()} />
     return <ProfilePanel displayName={displayName} email={displayEmail} profile={saved.profile} sampleData={sampleData} onBack={() => setView('home')} onToggleSampleData={handleSampleData} />
