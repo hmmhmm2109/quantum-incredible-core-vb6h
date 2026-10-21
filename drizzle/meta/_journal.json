@@ -8,6 +8,13 @@
       "when": 1792508970002,
       "tag": "0000_misty_colonel_america",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792518639554,
+      "tag": "0001_lumpy_sersi",
+      "breakpoints": true
     }
   ]
 }

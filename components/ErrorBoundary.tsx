@@ -490,37 +490,15 @@ export const handleApiError = (
 }
 
 // =============================================================================
-// Global Error Modal Provider (integrates with useAgent hook)
+// Global Error Modal Provider
 // =============================================================================
 
 export const GlobalErrorModal: React.FC = () => {
   const { error: globalError, clearError: clearGlobalError, handleFix: handleGlobalFix } = useGlobalErrorHandler()
-  const [agentError, setAgentError] = useState<ErrorDetails | null>(null)
 
-  // Register callback for useAgent hook errors
-  useEffect(() => {
-    // Dynamic import to avoid circular dependency
-    import('@/hooks/useAgent').then(({ setGlobalErrorCallback }) => {
-      setGlobalErrorCallback((err) => {
-        setAgentError(err)
-      })
-    }).catch(() => {
-      // Hook not available, that's ok
-    })
-  }, [])
-
-  const error = agentError || globalError
-  const clearError = () => {
-    setAgentError(null)
-    clearGlobalError()
-  }
-  const handleFix = () => {
-    if (agentError) {
-      requestFixFromParent(agentError)
-    } else {
-      handleGlobalFix()
-    }
-  }
+  const error = globalError
+  const clearError = clearGlobalError
+  const handleFix = handleGlobalFix
 
   if (!error || !isInIframe()) return null
 

@@ -1,12 +1,10 @@
 # Next.js React Frontend
 
-## DO NOT EXPLORE — START BUILDING IMMEDIATELY
+## START HERE
 
-For FRESH BUILDS: Do NOT list directories or browse the file structure. Read ONLY `response_schemas/*.json` and `workflow.json` — then immediately start writing `app/page.tsx`. No exploring, no reading other files.
+EmbedPath is a single-user embedded-systems learning app: Home, Skill Map, Lesson (with retrieval check, transfer exercise and Q&A), topic Practice, adaptive Assessment, Review and History. AI runs only through the local Claude CLI on the host (`lib/claude-cli.ts`); there is no Lyzr agent API.
 
-**GIT-NATIVE AGENTICOS EXCEPTION:** If `lib/agenticos/config.ts` exists, this app is already a full AgenticOS (Home, LLM Wiki, Skills Manager, Knowledge Base, Integrations, Skill Flows, Observe, Console, `/journeys/[slug]`). Do NOT write `app/page.tsx`. Read `workflow.json` + the PRD, then edit ONLY `lib/agenticos/config.ts` with this domain's journeys and chrome. Leave `components/agenticos/*` and `app/(agenticos)/*` alone.
-
-For ITERATIONS: Read `app/page.tsx` first to understand current state, then `response_schemas/*.json` for any updated response shapes. On a GitAgent Workbench app (`lib/agenticos/config.ts` exists), read that config instead — a git agent without it is a plain GitAgent build with a normal custom UI.
+Before changing a feature, read `README.md` and the files that feature owns (see "UI Code Location"). Topics, domains and their ids come from `lib/taxonomy.ts` only. `response_schemas/` and `workflow.json` are leftovers of the original build; the coach result shape is `lib/coach-schema.ts` plus `normalizeCoachResult()` in `lib/normalize.ts`.
 
 ---
 
@@ -24,39 +22,17 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 ```
 
-**Agent Calls** — two kinds, dispatched by the workflow agent entry's `type`:
-- Lyzr agents (have an `agent_id`) — `@/lib/aiAgent` (CLIENT COMPONENTS ONLY — has `'use client'`; calls pre-built `/api/agent` route — NEVER call from server components or server actions, NEVER create new routes)
-```tsx
-import { callAIAgent } from '@/lib/aiAgent'
-// callAIAgent(message, agent_id) — ONLY way to call Lyzr agents. NEVER custom fetch.
+**AI calls** — server routes only. Route handlers call `runClaudeJson` from `@/lib/claude-cli` (Claude CLI, JSON-schema output, max 4 concurrent processes; throws `ClaudeCliError` with an HTTP status). Wrap work that several requests may start at once in `singleFlight` (`@/lib/single-flight`). The browser never calls Claude directly: it calls the routes below with `authFetch` from `useAuth()` (`lyzr-architect-pg/client`), and wraps calls worth repeating in `withRetry` (`@/lib/retry`).
+```ts
+import { ClaudeCliError, runClaudeJson } from '@/lib/claude-cli'
+const raw = await runClaudeJson({ systemPrompt, message, jsonSchema }) // inside an authMiddleware route
 ```
-- Git-native agents (`"type": "git_agent"`, have a `slug`, NO agent_id) — `@/lib/gitAgent` (CLIENT COMPONENTS ONLY; calls pre-built `/api/git-agent/chat` route, streams live via SSE)
-```tsx
-import { streamGitAgent } from '@/lib/gitAgent'
-// streamGitAgent(message, slug, { onDelta, onToolEvent, onDone, onError }) — ONLY way to call git-native agents.
-await streamGitAgent(message, slug, {
-  onDelta: (text) => setResponse((r) => r + text),
-  onDone: () => setLoading(false),
-  onError: (msg) => setError(msg),
-})
-// slug is EXACTLY the workflow entry's slug (e.g. 'legal-office') — never append '-agent'.
-```
-
-### GitAgent AgenticOS (when `lib/agenticos/config.ts` exists)
-
-`create_git_agent` already scaffolded a working OS. Your job is the domain overlay:
-
-1. Set `deriveJourneysFromSkills: false`.
-2. Fill `appName`, `appSubtitle`, `greeting`, `tagline`, `roleLabel`, `searchPlaceholder`.
-3. Write 4–8 `journeys` for THIS domain (legal / HR / sales / ops / … — never keep finance copy unless the app is finance). Each journey needs `slug`, `title`, `description`, `icon` (a lucide name used by the shell), `skill` (must match a git-agent skill), `nudges`, `metrics`, `pendingActions`, `sections`.
-4. Fill `homeMetrics`, `insights`, `pendingActions`, `integrations`, `guardrails` so Home and Observe widgets show real domain content.
-5. Do not recreate sidebar, wiki, skills, knowledge, flows, or observe pages — they read this config + the live `{slug}-agent/` directory.
 
 ---
 
 ## COMPONENT WHITELIST (CLOSED SET — nothing else exists)
 
-**ONLY these components may be used in `app/page.tsx`.** If a name is not listed here, it does NOT exist. Define custom components inline as functions in page.tsx.
+**ONLY these components may be used in the UI.** If a name is not listed here, it does NOT exist. Define custom components as functions inside the page or section file that uses them.
 
 > **Design-system exception:** If the file `components/.design-system-manifest.md` exists, the active design system has pre-installed extra components. Every component listed in that manifest ALSO exists and MAY be imported and used (import by the path it gives; open the file to confirm exact exports before use). This is the ONLY exception to the closed set — do not treat any other unlisted name as real, and do not recreate or duplicate the manifest's components inline. (Design systems may also silently restyle the shadcn primitives below; use them exactly as normal — the restyling is automatic.)
 
@@ -153,14 +129,11 @@ Any lucide-react icon name is valid — check https://lucide.dev/icons for the f
 | `Tag` | `Badge` |
 | `Spinner` (from wrong path) | `Spinner` from `@/components/ui/spinner` or `Loader2` with `animate-spin` |
 | `Box` / `Stack` / `Flex` | Plain `<div>` with Tailwind flex/grid classes |
-| `@livekit/components-react` | INSTALLED, but only `@/components/voice/VoiceRoom` imports it. Never import it in `page.tsx` |
-| `LiveKitRoom` / `RoomAudioRenderer` / `BarVisualizer` / `useVoiceAssistant` | `useVoiceSession` + `<VoiceRoom call={call} />` — already wired |
-| `@livekit/agents` / `@livekit/krisp-noise-filter` | NOT INSTALLED. Noise cancellation is configured agent-side, not in the app |
 
-**Rule:** If you need a component that isn't in the whitelist above, **define it as a function** in `page.tsx`:
+**Rule:** If you need a component that isn't in the whitelist above, **define it as a function** in the file that uses it:
 
 ```tsx
-// CORRECT — define custom components inline
+// CORRECT — define custom components in the file that uses them
 function FeatureCard({ title, desc }: { title: string; desc: string }) {
   return (
     <Card>
@@ -173,143 +146,74 @@ function FeatureCard({ title, desc }: { title: string; desc: string }) {
 
 ---
 
-## callAIAgent Response (GUARANTEED CONTRACT)
+## API Response Contracts
 
-```tsx
-const result = await callAIAgent(message, AGENT_ID)
-```
+Data routes (`/api/<table>`) return `{ success: true, data }` or `{ success: false, error }` with a 4xx/5xx status. The AI routes return the same envelope; coach-shaped results arrive as:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `result.success` | `boolean` | Did the API call succeed (network + auth)? |
-| `result.response.status` | `'success' \| 'error'` | Did the agent itself succeed? |
-| `result.response.result` | `Record<string, any>` | **The agent's parsed output, passed through verbatim.** Read your schema fields here. |
-| `result.response.message` | `string \| undefined` | A best-effort display string derived from `result`. For toast/preview text only. |
-| `result.module_outputs` | `{ artifact_files?: [...] }` | Files/images emitted by the agent. |
+| `success` | `boolean` | Did the request succeed? |
+| `response.status` | `'success' \| 'error'` | Did the coach itself succeed? |
+| `response.result` | object | The coach result (`lib/coach-schema.ts` shape), passed through `normalizeCoachResult()` (`lib/normalize.ts`) before rendering |
+| `response.metadata` | object | Agent name, timestamp, request id |
 
-### Reading agent fields (CRITICAL)
-
-1. Read `response_schemas/<agent_name>.json` to find the exact field names.
-2. Access them on `result.response.result.<schema_field>`. **Period.**
-3. Do **not** re-parse `raw_response`. It is not present on success responses.
-4. Do **not** add multi-path fallbacks like `parsed.message ?? parsed.text ?? parsed.summary ?? ...`. If a schema field is missing, that is a real bug — let it surface as an error state, do not paper over it.
-
-```tsx
-if (!result.success || result.response.status !== 'success') {
-  setError(result.response.message ?? 'Request failed')
-  return
-}
-
-const data = result.response.result          // shape matches response_schemas/<agent>.json
-setVariants(data.variants ?? [])
-setEscalation(data.escalation_reason)
-setSummary(data.message)
-```
-
-**NEVER use static fallback strings like `'Analysis complete.'`** — show an error state when the response is empty.
-
-### Why no `raw_response` fallback?
-
-The `/api/agent` route guarantees `result.response.result` is the agent's parsed output. There is no scenario where re-parsing a raw string would be more correct than reading `response.result`. If they ever disagree, fix the route — don't defend against it in every UI.
-
-### Complete Usage Example
-```tsx
-'use client'
-import { useState } from 'react'
-import { callAIAgent } from '@/lib/aiAgent'
-
-export default function MyPage() {
-  const [loading, setLoading] = useState(false)
-  const [data, setData] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleSubmit = async () => {
-    setLoading(true)
-    setError(null)
-
-    const result = await callAIAgent(userMessage, AGENT_ID)
-
-    if (result.success && result.response.status === 'success') {
-      setData(result.response.result)        // shape from response_schemas/<agent>.json
-    } else {
-      setError(result.response.message ?? 'Request failed')
-    }
-
-    setLoading(false)
-  }
-
-  // ... rest of component
-}
-```
+1. Read the shape from `lib/coach-schema.ts` and the route's header comment, not from guesses.
+2. A response that fails `normalizeCoachResult()` is an error state ("did not match the saved learning schema"); do not paper over it with fallback fields.
+3. **NEVER use static fallback strings like `'Analysis complete.'`** — show an error state when the response is empty.
+4. The cached lecture keeps `retrieval_check.answer_rule` in `topic_lessons` for grading; `POST /api/lesson` blanks it before the response so the learner never sees the answer before submitting. Never send it to the client.
 
 ---
 
-## CRITICAL: EVERYTHING IS PRE-BUILT — NEVER RECREATE
+## CRITICAL: EXISTING CODE — REUSE, NEVER RECREATE
 
-This template is a complete, wired-up app. NEVER recreate, rewrite, or duplicate any existing file.
+Reuse what exists. Do not duplicate a route, helper or provider; extend it. New `route.ts` files are only for new tables or flows (see Database & Auth).
 
-### API Routes (NEVER create new `route.ts` files — exception: Database apps create auth + data routes, see Database & Auth section)
+### API Routes (`app/api/**/route.ts`, all behind `authMiddleware` except where noted)
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/agent` | POST | Call AI agent |
-| `/api/upload` | POST | Upload files for AI analysis |
-| `/api/rag` | POST/PATCH/DELETE | RAG knowledge base operations |
-| `/api/scheduler` | GET/POST/DELETE | Schedule management operations |
-| `/api/lyzr-config` | GET | Get API key (utility) |
-| `/api/voice/session` | POST | Voice calls — `start` / `end` / `transcript` / `history` modes |
+| `/api/auth/login`, `/register`, `/logout`, `/me` | POST/POST/POST/GET | Pre-built `lyzr-architect-pg` auth handlers (no `authMiddleware`) |
+| `/api/seed` | POST | Idempotent per-user seed (profile, starter activity, recommendation); single-flight + advisory lock |
+| `/api/learner_profiles`, `/topic_mastery`, `/activities`, `/attempts`, `/recommendations`, `/study_sessions`, `/learning_events` | GET/POST/PATCH/DELETE | Owner-scoped CRUD over the matching table |
+| `/api/assessment_sessions`, `/assessment_items`, `/assessment_responses` | GET/POST/PATCH/DELETE | Owner-scoped CRUD; PATCH `assessment_sessions` `{ id, status: 'abandoned' }` discards a session |
+| `/api/assessment/generate` | POST | Create a session (one topic or mixed diagnostic) or write one slot `{ session_id, slot }` with Claude; 409 when the slot exists |
+| `/api/assessment/grade` | POST | Grade one item on the server against the stored key (0 Claude calls), idempotent per item, updates mastery |
+| `/api/assessment/cleanup` | POST | Mark stale (24h, no response) `in_progress` sessions `abandoned` |
+| `/api/lesson` | POST | Lecture (base, variants, `adapt`, `cached_only`, `regenerate`) or topic practice (`next`) from the `topic_lessons` cache; Claude only on a miss |
+| `/api/lesson/ask` | GET/POST | Per-topic learner Q&A stored as `question` learning events (gaps feed `adapt`) |
+| `/api/lesson/transfer` | GET/POST | Claude grades a transfer exercise, or a retrieval check with `kind: 'retrieval'`; saved as an attempt + learning event |
+| `/api/lesson/complete` | POST | "Mark as learned" |
+| `/api/claude` | POST | Generic coach request (practice answers, lecture actions); also serves graded results shaped like the coach schema |
+| `/api/health`, `/api/sso-config`, `/api/access-check` | GET | Health check and SSO plumbing (do not modify `sso-config`) |
 
-### Client Libraries (NEVER write custom `fetch()` calls)
+### Libraries and hooks
 
-| Library | Import | Use for |
-|---------|--------|---------|
-| `@/lib/aiAgent` | `callAIAgent`, `uploadFiles`, `extractText` | Agent calls, file uploads — **Client Components only** (`'use client'`) |
-| `@/hooks/useAgent` | `useAgent`, `callAgentAPI` | React hook wrapper for agent calls — **Client Components only** |
-| `@/lib/ragKnowledgeBase` | `getDocuments`, `uploadAndTrainDocument`, `deleteDocuments`, `crawlWebsite`, `validateFile`, `isFileTypeSupported`, `useRAGKnowledgeBase` | RAG/knowledge base operations |
-| `@/lib/scheduler` | `listSchedules`, `getSchedule`, `getSchedulesForAgent`, `getScheduleLogs`, `getRecentExecutions`, `createSchedule`, `pauseSchedule`, `resumeSchedule`, `triggerScheduleNow`, `deleteSchedule`, `cronToHuman`, `useScheduler` | Schedule management |
-| `@/hooks/useVoiceSession` | `useVoiceSession` | Realtime voice calls — owns the whole call lifecycle. **See VOICE AGENTS below** |
-| `@/hooks/useTranscript` | `useTranscript` | Persisted transcript for a finished call |
-| `@/lib/voiceAgent` | `startVoiceSession`, `endVoiceSession`, `fetchTranscript`, `fetchCallHistory`, types | Low-level voice calls — prefer the hooks |
-| `@/lib/clipboard` | `copyToClipboard`, `useCopyToClipboard` | Clipboard operations |
-| `@/lib/jsonParser` | `parseLLMJson` | JSON parsing |
-| `@/lib/utils` | `cn` | Class name merging |
+| Module | Use for |
+|--------|---------|
+| `@/lib/taxonomy` | Single source of truth for domains, topics (learning order, prerequisites, subtopics). Renaming an id orphans stored data. Views over it: `@/lib/learning-topics` (picker options), `@/lib/assessment-topics` (sub-topic pool) |
+| `@/lib/claude-cli` | `runClaudeJson`, `ClaudeCliError`, `MODEL` (server only) |
+| `@/lib/coach-schema` | JSON schema of the coach result passed to Claude |
+| `@/lib/single-flight` | `singleFlight(key, run)`: concurrent identical server calls share one execution |
+| `@/lib/retry` | `withRetry`, `HttpError`: client retry policy (3 attempts, backoff, longer on 429) |
+| `@/lib/lesson-gaps` | Learner-question events (`question`) and open-gap helpers |
+| `@/lib/normalize` | Value coercers and `normalizeCoachResult` / `normalizeActivity` / `normalizeQuestion` |
+| `@/lib/app-types`, `@/lib/sample-data`, `@/lib/assessment-slots`, `@/lib/assessment-view`, `@/lib/home-recommendation` | Page types, sample data, slot ordering, and pure builders for Home / Skill Map / assessment view data |
+| `@/hooks/use-saved-data` | Saved profile / mastery / attempts / assessments, `refreshMastery`, sample-data switch |
+| `@/hooks/use-lesson` | Lesson, topic practice, retrieval check and transfer handlers |
+| `@/lib/clipboard` | `copyToClipboard`, `useCopyToClipboard` |
+| `@/lib/utils` | `cn` |
 
-### Tool Parameter Forms (for agents with tools)
-
-**If your agent uses external tools (Gmail, Slack, Calendar, etc.), create input forms to collect required parameters BEFORE calling the agent.**
-
-Example for Gmail send email:
-```tsx
-const [emailForm, setEmailForm] = useState({ recipient: '', subject: '', body: '' })
-
-<Input 
-  placeholder="Recipient" 
-  value={emailForm.recipient}
-  onChange={(e) => setEmailForm(prev => ({ ...prev, recipient: e.target.value }))}
-/>
-<Button 
-  onClick={() => callAIAgent(`Send email to ${emailForm.recipient}...`, AGENT_ID)}
-  disabled={!emailForm.recipient || !emailForm.subject}
->
-  Send Email
-</Button>
-```
-
-See `TOOL_PARAMETER_FORMS_GUIDE.md` for complete patterns and examples.
+`scripts/gen-cleanup-topic-mastery.ts` regenerates `scripts/cleanup-topic-mastery.sql` from `lib/taxonomy.ts` (`npx tsx scripts/gen-cleanup-topic-mastery.ts`); rerun it whenever the taxonomy changes.
 
 ### Components (NEVER create files in `components/`)
 
-All shadcn/ui components are installed at `@/components/ui/*`. See COMPONENT WHITELIST above. Define custom components inline in `page.tsx`.
-
-**Exception — voice apps:** `@/components/voice/*` is pre-built (`VoiceRoom`, `CallButton`, `AgentVisualizer`, `AgentOrb`, `TranscriptView`, `VoiceStatus`, `VoiceSupportWidget`). Import them; never recreate them and never add files to `components/voice/`. `@/components/ui/mic-selector` (`MicSelector`) and `@/components/ui/persona` (`Persona`) are also pre-built — `MicSelector` is a compact pill (mic-mute segment + device-picker chevron), no LiveKit awareness of its own, so wire it explicitly: `onValueChange` → `call.setInputDevice(deviceId)`, `muted`/`onMutedChange` → `call.isMuted`/`() => call.toggleMute()` (ignore the boolean `onMutedChange` hands you — `toggleMute` already flips off the current controlled value). Render it unconditionally, without a `disabled={call.state !== 'live'}` guard — `useVoiceSession` starts `isMuted` as `true` by default and lets both the mute toggle and the device picker be used before a call even starts, applying whatever was chosen to the real track the moment it connects. `AgentOrb` already wraps `Persona` with the same `analyser`/`agentState` contract as the other visualizers, so reach for `AgentOrb`, not `Persona` directly, unless a brief specifically needs a different Persona `variant`.
-
-Voice pages are intentionally simple: use one real `AgentOrb` or `AgentVisualizer` as the focal point, then the `CallButton`, real `MicSelector`, status, and live `TranscriptView`. Do not imitate an orb with CSS, a decorative background, or an unrelated bar animation. Do not invent dashboards, action-item panels, chat controls, or other application content unless the user explicitly requests a separate non-voice workflow. A normal voice flow has one Voice agent and no hosted agent UI; do not render controls or output panels for managers or sub-agents unless the user explicitly requested that architecture.
+`components/ui/*` is shadcn. `components/` also holds infrastructure (`ClientProviders`, `ErrorBoundary`, `IframeLoggerInit`, `SSOGuard`). Page-level UI lives in `app/sections/` (see below).
 
 ### Providers (already in `layout.tsx` — NEVER recreate)
 
-`ErrorBoundary` · `AgentInterceptorProvider` · `IframeLoggerInit` · `KnowledgeBaseUpload` · `SSOGuard`
+`ErrorBoundary` (via `ClientProviders`) · `IframeLoggerInit` · `SSOGuard`
 
-**If it exists in the template, import it. Do not rebuild it.**
+**If it exists, import it. Do not rebuild it.**
 
 ### Pre-configured infrastructure — DO NOT MODIFY
 
@@ -323,279 +227,46 @@ Voice pages are intentionally simple: use one real `AgentOrb` or `AgentVisualize
 
 ## UI Code Location
 
-**CRITICAL:**
-- ALL UI code goes in `app/page.tsx`
-- Define components inline or import from `@/components/ui/`
-- NEVER create files in `components/` (reserved for shadcn/ui)
+`app/page.tsx` is composition: `AuthProvider` + `ProtectedRoute`, view state, and the handlers that tie sections to hooks. Keep it from growing back into a monolith.
 
-```tsx
-// app/page.tsx
+| Where | What |
+|-------|------|
+| `app/page.tsx` | View routing, assessment and practice flow state, `requestCoach` |
+| `app/sections/*.tsx` | Page-level sections, typed props: `home-section`, `skill-map-section`, `lesson-section` (+ `lesson-ask`), `practice-section` (practice and assessment), `result-section`, `app-shell` (auth screen, navigation, header), `history-profile-section` |
+| `hooks/use-saved-data.ts`, `hooks/use-lesson.ts` | Data loading and lesson handlers shared across views |
+| `lib/*.ts` | Pure helpers, types and sample data (see the table above) |
 
-// Define inline components
-const ChatMessage = ({ message }: { message: string }) => (
-  <div className="p-4 bg-muted rounded-lg">{message}</div>
-)
-
-// Main page component
-export default function Page() {
-  return (
-    <div>
-      <ChatMessage message="Hello" />
-    </div>
-  )
-}
-```
+Views: `home`, `practice`, `assessment`, `review`, `lesson`, `skill-map`, `history`, `profile`.
 
 ---
 
-## Sections (for parallel builds)
+## Sections
 
-- `app/sections/*.tsx` — max 4 files, page-level sections only
-- Each: `'use client'`, one `export default function`, typed props
+- `app/sections/*.tsx` — page-level sections only; keep each focused on one view or one shell concern (currently 8 files)
+- Each: `'use client'`, typed props. View sections have one `export default function`; `app-shell.tsx` and `history-profile-section.tsx` group small related components as named exports
 - Same import rules as page.tsx (shadcn/ui, lucide-react, @/lib/*)
 - `components/` still reserved for shadcn/ui — NEVER create files there
-- Simple apps (1 agent, no special features): skip sections, use monolithic page.tsx
+- Do not rename exports or props that `app/page.tsx` passes; change both sides together
 
 ## Write Tool Fallback
 
-If the Write tool fails for any file (`app/page.tsx` or `app/sections/*.tsx`):
+If the Write tool fails for any large file (for example `app/page.tsx` or `app/sections/*.tsx`):
 1. Write a minimal version first (imports + one component)
 2. Use Edit to append remaining components one at a time
 3. Never retry the same failed Write — always switch to incremental Edit
 
 ---
 
-## File Upload with AI Analysis
-
-```tsx
-'use client'
-import { uploadFiles, callAIAgent } from '@/lib/aiAgent'
-
-const handleFileUpload = async (file: File) => {
-  // 1. Upload file
-  const uploadResult = await uploadFiles(file)
-
-  if (uploadResult.success) {
-    // 2. Call agent with asset IDs
-    const result = await callAIAgent('Analyze this document', AGENT_ID, {
-      assets: uploadResult.asset_ids
-    })
-  }
-}
-```
-
----
-
-## RAG Knowledge Base
-
-```tsx
-'use client'
-import {
-  getDocuments,
-  uploadAndTrainDocument,
-  deleteDocuments,
-  useRAGKnowledgeBase
-} from '@/lib/ragKnowledgeBase'
-
-// Using hook
-const { documents, loading, fetchDocuments, uploadDocument, removeDocuments } = useRAGKnowledgeBase()
-
-// Or direct functions
-const docs = await getDocuments('rag-id')
-await uploadAndTrainDocument('rag-id', file)
-await deleteDocuments('rag-id', ['doc.pdf'])
-```
-
----
-
-## VOICE AGENTS (only for voice apps — skip this section otherwise)
-
-A voice agent is a **realtime phone-call-like conversation**, not text chat.
-`useVoiceSession` owns the call lifecycle and `<VoiceRoom />` owns the audio.
-**Never write WebRTC, `RTCPeerConnection`, `getUserMedia`, `new WebSocket`, or
-raw `livekit-client` code yourself.**
-
-> **`<VoiceRoom call={call} />` is mandatory.** It renders nothing and can sit
-> anywhere in the page. Without it the call connects, the state machine runs,
-> the button turns red — and the user hears nothing at all.
-
-### The whole thing
-
-```tsx
-'use client'
-
-import { useVoiceSession } from '@/hooks/useVoiceSession'
-import { VoiceRoom } from '@/components/voice/VoiceRoom'
-import { CallButton } from '@/components/voice/CallButton'
-import { AgentVisualizer } from '@/components/voice/AgentVisualizer'
-import { MicSelector } from '@/components/ui/mic-selector'
-import { TranscriptView } from '@/components/voice/TranscriptView'
-import { VoiceStatus } from '@/components/voice/VoiceStatus'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-const AGENT_ID = '<voice-agent-id>'   // provided when the agent is created
-
-export default function Page() {
-  const call = useVoiceSession({ agentId: AGENT_ID })
-
-  return (
-    <main className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
-      {/* Audio. Renders nothing. Required — without it the call is silent. */}
-      <VoiceRoom call={call} />
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Talk to your assistant</CardTitle>
-          <VoiceStatus state={call.state} agentState={call.agentState} error={call.error} />
-        </CardHeader>
-        <CardContent className="flex flex-col items-center gap-6">
-          <AgentVisualizer analyser={call.analyser} agentState={call.agentState} />
-          <div className="flex gap-2">
-            <CallButton state={call.state} onClick={call.toggle} />
-            <MicSelector
-              muted={call.isMuted}
-              onMutedChange={() => call.toggleMute()}
-              onValueChange={call.setInputDevice}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      <TranscriptView items={call.transcript} className="max-h-80" />
-    </main>
-  )
-}
-```
-
-### Placement rules
-
-- `VoiceRoom` is invisible. Make it the first child of the page root and forget it. Exactly one per page.
-- `VoiceStatus` goes in a header or beside the call button — it is one small badge, never a block.
-- `AgentVisualizer` is the focal point while live. Give it room; it needs no props but `analyser`.
-- `CallButton` is the only control the user needs. Add the `variant="mute"` one beside it.
-- `TranscriptView` scrolls itself — give it a bounded height (`max-h-80`) or it grows forever.
-- One call per page. Do not render two `useVoiceSession` hooks.
-
-### Choosing a layout — full page vs. embedded widget
-
-Two pre-built layouts exist; pick the one the use case actually implies, do
-not default to the full page every time:
-
-- **Full page** (the example above) — the call IS the app, or one of its main
-  screens. "Talk to my agent", a voice-only assistant, a receptionist app.
-- **`VoiceSupportWidget`** — the call is a secondary, always-available help
-  channel bolted onto a page that has its own primary content. "A support
-  widget the user can open while browsing", "voice help on my dashboard".
-
-```tsx
-import { VoiceSupportWidget } from '@/components/voice/VoiceSupportWidget'
-
-const AGENT_ID = '<voice-agent-id>'
-
-export default function Page() {
-  return (
-    <main>
-      {/* ...the rest of the page's real content... */}
-      <VoiceSupportWidget agentId={AGENT_ID} title="Talk to us" />
-    </main>
-  )
-}
-```
-
-`VoiceSupportWidget` is self-contained: it owns its own `useVoiceSession` and
-mounts `<VoiceRoom>` internally. **Do not also call `useVoiceSession` or mount
-`<VoiceRoom>` elsewhere on a page that uses it** — that would be a second call
-on the same page, which the hook does not support. Just drop it in. Collapsing
-the widget (the chevron) never ends an in-progress call — only its own
-"End call" button does — so the launcher deliberately keeps a pulsing ring
-while `call.state === 'live'` even when collapsed, so the user never loses
-track of a call still running in the background.
-
-### AgentVisualizer vs. AgentOrb
-
-Both take the same props (`analyser`, `agentState`) and are interchangeable —
-swap one for the other, nothing else changes:
-
-- `AgentVisualizer` — a bar visualizer. The safe default; reads as a classic
-  "audio levels" indicator.
-- `AgentOrb` — a single glowing orb (via `@/components/ui/persona`'s
-  `Persona`). Use it when the brief calls for something calmer or more
-  ambient than bars (e.g. a wellness/meditation assistant, a warm/friendly
-  support persona) — pass it as `VoiceSupportWidget`'s `visualizer` prop, or
-  drop it in place of `AgentVisualizer` in the full-page layout. It's
-  lazy-loaded (`next/dynamic({ ssr: false })`, `Spinner` placeholder) since
-  `Persona`'s runtime is heavy enough to notice on first paint — a new
-  component that renders `Persona` directly should do the same.
-
-An earlier animated-face persona component (mouth driven by raw audio
-amplitude, not real viseme lip-sync) was tried and removed — revisit only if
-a brief specifically needs a talking-face avatar and true lip-sync data
-becomes available from the voice pipeline.
-
-```tsx
-// VoiceSupportWidget renders `visualizer` in place of AgentVisualizer, wiring
-// call.analyser/call.agentState into it internally — pass only the styling
-// props (size, variant, ...) you actually want here.
-<VoiceSupportWidget agentId={AGENT_ID} visualizer={<AgentOrb variant="opal" size={50} />} />
-```
-
-(`analyser`/`agentState` are optional on `AgentOrb` for exactly this —
-`VoiceSupportWidget` clones the element with the real live values at render
-time, overriding whatever you do or don't pass for those two.)
-
-### What the hook gives you
-
-`state` (`idle`/`connecting`/`live`/`ending`/`ended`/`error`) · `agentState`
-(`listening`/`thinking`/`speaking`) · `transcript` · `sessionId` · `isMuted` ·
-`analyser` · `error` · `connect()` · `hangup()` · `toggleMute()` · `toggle()`
-
-Personalise a call by passing values for `{{placeholders}}` in the agent prompt:
-
-```tsx
-useVoiceSession({ agentId: AGENT_ID, dynamicVariables: { user: userName } })
-```
-
-### Two CONDITIONAL rules — do not import what the app did not ask for
-
-**1. Call history / transcript review — only if the app asks for it.**
-A plain "talk to my agent" app uses `call.transcript` (live) and nothing else.
-Only reach for `useTranscript` when the app is about reviewing calls after the
-fact — summaries, sentiment, call logs:
-
-```tsx
-const t = useTranscript(call.state === 'ended' ? call.sessionId : null)
-
-{t.status === 'pending' && <p>Preparing your transcript…</p>}
-{t.status === 'ready' && <TranscriptView items={t.items} />}
-```
-
-`status === 'pending'` is normal for a few seconds after a call — transcripts
-are written asynchronously. It is **not** an error; never show a failure state
-for it.
-
-**2. Telephony (real phone calls) is NOT available.** There are no phone hooks
-in this template. If the user asks for outbound calling, SMS, or a phone
-number, build the browser-mic experience and say telephony is not supported.
-
-### Voice agents do not use the text-agent contract
-
-No `callAIAgent`, no `{status, result, metadata}` envelope, no response schema,
-no `/api/agent`. Those are for text agents. A voice app that renders a chat
-input box has been built wrong.
-
----
-
 ## Environment Variables
 
-**Server-side (in `.env.local`):**
+**Server-side (set by the host or in `.env.local`):**
 ```
-LYZR_API_KEY=your-api-key
-LYZR_VOICE_BASE_URL=https://voice-livekit.studio.lyzr.ai   # voice apps only, host with no /v1
-LYZR_VOICE_AGENT_ID=<voice-agent-id>                       # voice apps only, optional fallback
+DATABASE_PROVIDER=postgres
+DATABASE_URL=postgresql://...
+APP_JWT_SECRET=...
 ```
 
-These are set for you. Never hardcode a key, and never prefix one with
-`NEXT_PUBLIC_` — that ships it to the browser.
+The `claude` CLI must be on the server's `PATH` with a logged-in session (see README, Known limitations). Never hardcode a secret, and never prefix one with `NEXT_PUBLIC_` — that ships it to the browser.
 
 **Client-side access (if needed):**
 ```tsx
@@ -729,11 +400,11 @@ When the app has a database (`DATABASE_URL` env var is set) and `DATABASE_PROVID
 
 > **Legacy apps:** if `DATABASE_PROVIDER=mongodb`, this is an older Mongo-backed app — skip this section and follow the LEGACY subsection at the end instead.
 
-> **Auth is OPTIONAL.** Only add login/register/auth UI if the user explicitly asks for it. Many apps just need a database without user accounts — a todo app, a notes app, a dashboard do NOT need auth unless the user says so.
+> **Auth is already wired.** Login, register, logout and me routes exist, and `AuthProvider` + `ProtectedRoute` wrap the app in `app/page.tsx`. Every learner table is owner-scoped. Tables: `learner_profiles`, `topic_mastery`, `activities`, `attempts`, `recommendations`, `study_sessions`, `learning_events`, `assessment_sessions`, `assessment_items`, `assessment_responses`, `topic_lessons` (shared lesson cache, no owner).
 
 **CRITICAL RULES:**
 - **NEVER use `localStorage` or `sessionStorage` for application data** (tasks, notes, records, user data). localStorage is ONLY for UI preferences (theme, sidebar). All persistent data MUST go through API routes backed by the database.
-- NEVER add auth/login/register unless explicitly requested by the user
+- NEVER add a second auth mechanism; use the existing handlers and `useAuth().authFetch`
 - NEVER write custom JWT, bcrypt, session, or cookie auth code
 - NEVER import `mongoose`, `mongodb`, `pg`, or `@prisma/*` — use `lyzr-architect-pg` + drizzle
 - NEVER access the `_users` table directly — use the auth API handlers
@@ -803,9 +474,9 @@ const rows = await db.select().from(notes).orderBy(desc(notes.created_at))
 await db.insert(notes).values({ body: 'hi' })
 ```
 
-### 3. Auth Routes — Pre-built Handlers (ONLY if user requests auth)
+### 3. Auth Routes — Pre-built Handlers (already in `app/api/auth/*`)
 
-**Do NOT add these unless the user explicitly asks for login/register/user accounts.** Identical to before — only the import changes:
+**These routes exist; do not re-add them.** For reference:
 
 ```ts
 // app/api/auth/register/route.ts
@@ -862,11 +533,9 @@ export const POST = authMiddleware(async (req: NextRequest) => {
 })
 ```
 
-### 5. Client Components — Auth UI (ONLY if user requests auth)
+### 5. Client Components — Auth UI (already in `app/page.tsx` and `app/sections/app-shell.tsx`)
 
-**Do NOT add `AuthProvider`, `LoginForm`, `RegisterForm`, `ProtectedRoute`, or `UserMenu` unless the user explicitly asks for user accounts or login.**
-
-If auth IS requested: `AuthProvider` MUST live in `app/page.tsx` — never in `layout.tsx`, `ClientProviders.tsx`, or any other file. Placing it outside `page.tsx` breaks React context across the RSC boundary and causes a permanent loading screen.
+Do not add a second `AuthProvider`. `AuthProvider` MUST live in `app/page.tsx` — never in `layout.tsx`, `ClientProviders.tsx`, or any other file. Placing it outside `page.tsx` breaks React context across the RSC boundary and causes a permanent loading screen.
 
 ```tsx
 // app/page.tsx  ← AuthProvider goes HERE, nowhere else
@@ -927,21 +596,20 @@ Older apps were built on a MongoDB stack (`lyzr-architect`/Mongoose) that the pl
 ## Anti-Hallucination Checklist
 
 Before writing UI code:
-- [ ] Read workflow.json for agent_ids?
-- [ ] Read response_schemas/*.json for field names?
-- [ ] Interfaces match schema exactly?
+- [ ] Read the feature's route header comment and `lib/coach-schema.ts` for exact field names?
+- [ ] Topic and domain ids taken from `lib/taxonomy.ts`, never typed by hand?
 - [ ] Using optional chaining (?.)?
 - [ ] Loading/error states handled?
 - [ ] Only lucide-react icons?
 - [ ] Only shadcn/ui components?
-- [ ] 'use client' directive for client components? (`callAIAgent`, hooks, event handlers — all need it)
-- [ ] `callAIAgent` only called from 'use client' components? (calling from server = runtime crash)
+- [ ] 'use client' directive for client components? (hooks, event handlers — all need it)
+- [ ] Claude is only called from server routes (`runClaudeJson`), never from the browser?
+- [ ] `retrieval_check.answer_rule` never sent to the client before grading?
 - [ ] No navigator.clipboard? (use @/lib/clipboard)
 - [ ] Database code uses `lyzr-architect-pg` + drizzle (never mongoose/pg/prisma; legacy mongo apps use `lyzr-architect`)?
 - [ ] Auth uses pre-built handlers (not custom JWT/bcrypt)?
 - [ ] Tables defined in `lib/db/schema.ts` and `npm run db:generate` + `npm run db:migrate` run after every schema edit?
 - [ ] User-owned tables have `owner_user_id: ownerUserId()` + index, and are accessed via `scopedRepo` inside `authMiddleware`? (scopedRepo outside authMiddleware = "No auth context" crash)
-- [ ] Auth UI (`LoginForm`, `AuthProvider`, `ProtectedRoute`) only added if user explicitly requested it?
 - [ ] Dynamic route params awaited? (`const { id } = await ctx.params` — NOT `ctx.params.id`)
 - [ ] `searchParams` awaited in page components?
 - [ ] All API routes wrapped in `try/catch`?
@@ -950,3 +618,4 @@ Before writing UI code:
 - [ ] No hand-edited SQL in `drizzle/`?
 - [ ] ZERO localStorage/sessionStorage for application data? (only UI preferences like theme)
 - [ ] Data fetched from API routes (not from localStorage)?
+- [ ] Changed the taxonomy? Regenerate `scripts/cleanup-topic-mastery.sql`.

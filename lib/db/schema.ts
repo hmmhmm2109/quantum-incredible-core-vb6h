@@ -10,6 +10,7 @@ import {
   pgTable,
   text,
   timestamps,
+  uniqueIndex,
 } from 'lyzr-architect-pg/schema'
 
 export const learner_profiles = pgTable(
@@ -173,4 +174,19 @@ export const assessment_responses = pgTable(
     ...timestamps,
   },
   (table) => [index('assessment_responses_owner_idx').on(table.owner_user_id)],
+)
+
+// Lessons are generic per topic, so this cache is shared by all learners (no owner column).
+export const topic_lessons = pgTable(
+  'topic_lessons',
+  {
+    id: text('id').primaryKey().$defaultFn(() => generateId()),
+    domain_id: text('domain_id').notNull(),
+    topic_id: text('topic_id').notNull(),
+    kind: text('kind').notNull(),
+    content: jsonb('content').notNull(),
+    model: text('model').notNull(),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex('topic_lessons_topic_kind_idx').on(table.domain_id, table.topic_id, table.kind)],
 )
