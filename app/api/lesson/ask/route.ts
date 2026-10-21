@@ -111,7 +111,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     // One flight per learner, topic, place and question text, so a double submit saves and charges one Q&A.
     const hash = createHash('sha1').update(question).digest('hex').slice(0, 12)
     const saved = await singleFlight(`ask:${ownerId}:${domain.id}:${topic.id}:${variant ?? 'base'}:${sectionIndex ?? 'general'}:${hash}`, async () => {
-      const raw = await runClaudeJson({ systemPrompt: ASK_PROMPT, message, jsonSchema: ASK_SCHEMA }) as Record<string, unknown>
+      const raw = await runClaudeJson({ systemPrompt: ASK_PROMPT, message, jsonSchema: ASK_SCHEMA, purpose: 'lesson/ask' }) as Record<string, unknown>
       const gap = raw.gap as Record<string, unknown> | undefined
       if (typeof raw.answer !== 'string' || !raw.answer.trim() || typeof gap?.is_gap !== 'boolean') throw new ClaudeCliError('Claude CLI returned an invalid answer', 502)
       const isGap = gap.is_gap

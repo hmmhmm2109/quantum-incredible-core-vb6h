@@ -110,7 +110,7 @@ Answer coherent=false (and say what is wrong in "problem", one sentence) if any 
 async function judgeCoherence(question: RawQuestion): Promise<string | null> {
   try {
     const keyed = [...new Set(question.correct_indexes)].map((index) => question.options[index])
-    const verdict = (await runClaudeJson({ systemPrompt: JUDGE_PROMPT, message: JSON.stringify({ stem: question.stem, artifact: question.artifact, options: question.options, keyed_options: keyed, explanation: question.explanation }), jsonSchema: JUDGE_SCHEMA, timeoutMs: 60_000 })) as { coherent?: boolean; problem?: string }
+    const verdict = (await runClaudeJson({ systemPrompt: JUDGE_PROMPT, message: JSON.stringify({ stem: question.stem, artifact: question.artifact, options: question.options, keyed_options: keyed, explanation: question.explanation }), jsonSchema: JUDGE_SCHEMA, timeoutMs: 60_000, purpose: 'assessment/judge' })) as { coherent?: boolean; problem?: string }
     return verdict.coherent === false ? `judge: ${verdict.problem?.trim() || 'options do not answer the stem'}` : null
   } catch {
     return null
@@ -132,7 +132,7 @@ async function generateItem(sessionId: string, slot: Slot) {
   let problem: string | null = null
   for (let attempt = 0; !raw; attempt += 1) {
     const message = JSON.stringify(problem ? { ...request, rejected_previous_attempt: `${problem}. Fix this; the stem and the options must answer the same question.` } : request)
-    const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message, jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000 })
+    const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message, jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000, purpose: 'assessment/generate' })
     const candidate = (output as { questions?: RawQuestion[] }).questions?.[0]
     problem = candidate ? validate(candidate, slot) : 'question is missing'
     if (candidate && !problem && needsJudge(candidate.stem)) problem = await judgeCoherence(candidate)

@@ -20,6 +20,8 @@ type RunOptions = {
   message: string
   jsonSchema?: object
   timeoutMs?: number
+  /** Which route or step started this call; logged with duration and exit code. */
+  purpose?: string
 }
 
 type CommandResult = { exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }
@@ -94,8 +96,11 @@ function parseJsonText(value: string): unknown {
 export async function runClaudeJson(options: RunOptions): Promise<unknown> {
   if (active >= MAX_CONCURRENT) throw new ClaudeCliError('The tutor is busy. Try again in a moment.', 429)
   active += 1
+  const startedAt = Date.now()
+  let outcome = 'error'
   try {
     const command = await spawnClaude(options)
+    outcome = command.timedOut ? 'timeout' : `exit ${command.exitCode}`
     if (command.timedOut) throw new ClaudeCliError('Claude CLI timed out', 504)
     if (command.exitCode !== 0) {
       console.error('[claude-cli] exit', command.exitCode, command.stderr.slice(0, 2000))
@@ -125,5 +130,6 @@ export async function runClaudeJson(options: RunOptions): Promise<unknown> {
     throw error
   } finally {
     active -= 1
+    console.info(`[claude-cli] purpose=${options.purpose ?? 'unknown'} duration_ms=${Date.now() - startedAt} result=${outcome}`)
   }
 }

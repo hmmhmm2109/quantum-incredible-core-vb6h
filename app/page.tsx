@@ -267,13 +267,13 @@ function EmbedPathApp() {
     else if (next === null || generated.pending === 0) setWaitingNext(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waitingNext, generated, currentSlot])
-  const requestCoach = async (message: string, itemId?: string, target?: { url: string; body: unknown }) => {
+  const requestCoach = async (message: string, target?: { url: string; body: unknown }) => {
     setActiveAgentId(CLAUDE_RUNTIME)
     try {
       const response = await authFetch(target?.url ?? '/api/claude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(target?.body ?? { message, item_id: itemId }),
+        body: JSON.stringify(target?.body ?? { message }),
       })
       const result: unknown = await response.json()
       const resultRecord = recordValue(result)
@@ -315,11 +315,9 @@ function EmbedPathApp() {
   const gradeCurrent = async () => {
     const currentItem = generated ? generated.items[Math.min(assessmentIndex, generated.items.length - 1)] : undefined
     const itemId = stringValue(currentItem?.id) || undefined
-    if (generated && !itemId) { toast.error('This question has no saved id. Reload the page and resume the assessment.'); return null }
-    const result = itemId
-      ? await requestCoach('', undefined, { url: '/api/assessment/grade', body: { item_id: itemId, selected_answers: selectedAnswers.length > 0 ? selectedAnswers : [answerText], confidence, justification } })
-      : await requestCoach(`request_type: assessment_submission\nitem_id: ${itemId ?? 'none'}\nmode: ${assessmentMeta.mode}\nquestion_index: ${assessmentIndex + 1}\nquestion: ${assessmentQuestion.stem}\nselected_answers: ${selectedAnswers.join(' | ') || answerText}\nconfidence: ${confidence || 'not supplied'}\nwritten justification: ${justification}\nassessment metadata: ${JSON.stringify(assessmentMeta)}\nDo not reveal correctness during the active assessment. After submission, return the complete structured review with valid or excluded items, misconception analysis, bounded mastery impact, explanations, remediation, and the Claude CLI runtime state.`, itemId)
-    if (result && itemId) { setGradedNow((current) => [...current, itemId]); await refreshMastery() }
+    if (!itemId) { toast.error('This question has no saved id. Reload the page and resume the assessment.'); return null }
+    const result = await requestCoach('', { url: '/api/assessment/grade', body: { item_id: itemId, selected_answers: selectedAnswers.length > 0 ? selectedAnswers : [answerText], confidence, justification } })
+    if (result) { setGradedNow((current) => [...current, itemId]); await refreshMastery() }
     return result
   }
   const showReview = (result: ReviewData) => { setReview(result); setHints(result.hints); setClaudeState(fallbackClaudeFromReview(result)); setView('review'); if (generated && generated.missing.length > 0) toast.warning(`${generated.items.length} of ${generated.total} questions were generated; this assessment is incomplete.`) }

@@ -136,7 +136,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       `Previous topic in the course: ${previous?.label ?? 'none (this is the first topic)'}`,
       'selected_topic_only: true',
     ].join('\n')
-    const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA }) as Record<string, unknown>
+    const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA, purpose: 'lesson/lecture' }) as Record<string, unknown>
 
     let result: { content: Record<string, unknown>; cached: boolean }
     let exercise = 1
@@ -176,7 +176,7 @@ ${JSON.stringify(base.content)}
 
 <learner_gaps>
 ${JSON.stringify(gapList)}
-</learner_gaps>`, jsonSchema: LECTURE_SCHEMA }) as Record<string, unknown>
+</learner_gaps>`, jsonSchema: LECTURE_SCHEMA, purpose: 'lesson/adapt' }) as Record<string, unknown>
           await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind, content: generated, model: MODEL }).onConflictDoUpdate({ target: [topic_lessons.domain_id, topic_lessons.topic_id, topic_lessons.kind], set: { content: generated, model: MODEL, updated_at: new Date() } })
           await db.update(learning_events).set({ evidence: sql`${learning_events.evidence} || ${JSON.stringify({ resolved: true, resolved_at: new Date().toISOString() })}::jsonb` }).where(inArray(learning_events.id, gaps.map((row) => row.id)))
           return generated
@@ -186,7 +186,7 @@ ${JSON.stringify(gapList)}
     } else if (action) {
       result = await getOrCreate(kind, async () => {
         const base = await getOrCreate('lecture', generateLecture)
-        return await runClaudeJson({ systemPrompt: `${LECTURE_PROMPT}\nYou are producing a VARIANT of an existing lesson. ${LECTURE_ACTIONS[action]}`, message: `${topicRequest}\n\nExisting lesson (JSON):\n${JSON.stringify(base.content)}`, jsonSchema: LECTURE_SCHEMA }) as Record<string, unknown>
+        return await runClaudeJson({ systemPrompt: `${LECTURE_PROMPT}\nYou are producing a VARIANT of an existing lesson. ${LECTURE_ACTIONS[action]}`, message: `${topicRequest}\n\nExisting lesson (JSON):\n${JSON.stringify(base.content)}`, jsonSchema: LECTURE_SCHEMA, purpose: 'lesson/variant' }) as Record<string, unknown>
       })
     } else {
       if (part === 'practice') {
@@ -204,12 +204,12 @@ ${JSON.stringify(gapList)}
               .filter(Boolean).slice(0, 3)
             const earlier = rows.slice(-5).map((row) => { const a = (row.content as { activity?: { prompt?: string; level_band?: string } }).activity; return `- exercise ${practiceNumber(row.kind)} (${a?.level_band ?? 'unknown level'}): ${String(a?.prompt ?? '').replace(/\s+/g, ' ').slice(0, 220)}` })
             const message = `${topicRequest}\n\n<previous_exercises>\n${earlier.join('\n')}\n</previous_exercises>\n<weak_points>\n${misses.length > 0 ? misses.map((line) => `- ${line}`).join('\n') : '- none recorded'}\n</weak_points>`
-            result = await getOrCreate(practiceKind(exercise), async () => await runClaudeJson({ systemPrompt: PRACTICE_NEXT_PROMPT, message, jsonSchema: PRACTICE_SCHEMA }) as Record<string, unknown>)
+            result = await getOrCreate(practiceKind(exercise), async () => await runClaudeJson({ systemPrompt: PRACTICE_NEXT_PROMPT, message, jsonSchema: PRACTICE_SCHEMA, purpose: 'lesson/practice-next' }) as Record<string, unknown>)
           } else result = { content: newest.content as Record<string, unknown>, cached: true }
         } else if (newest) result = { content: newest.content as Record<string, unknown>, cached: true }
         // Opening a lesson only looks for a stored exercise; it is written when the learner asks for it.
         else if (body.cached_only === true) return NextResponse.json({ success: false, error: 'No practice exercise yet.' })
-        else result = await getOrCreate('practice', async () => await runClaudeJson({ systemPrompt: PRACTICE_PROMPT, message: topicRequest, jsonSchema: PRACTICE_SCHEMA }) as Record<string, unknown>)
+        else result = await getOrCreate('practice', async () => await runClaudeJson({ systemPrompt: PRACTICE_PROMPT, message: topicRequest, jsonSchema: PRACTICE_SCHEMA, purpose: 'lesson/practice' }) as Record<string, unknown>)
       } else result = await getOrCreate(part, generateLecture)
     }
 
