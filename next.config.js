@@ -16,9 +16,9 @@ const nextConfig = {
   // normal behaviour is unchanged.
   distDir: process.env.NEXT_BUILD_DIST_DIR || '.next',
 
-  // Reduce build time by skipping type checking (run `npm run typecheck` separately)
+  // Type errors fail the build; `npm run typecheck` runs the same check on its own
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
 
   // Optimize images

@@ -252,6 +252,7 @@ function normalizeCoachResult(raw: unknown, envelopeMetadata?: unknown): ReviewD
     hints, lecture: { selected_depth: stringValue(lectureRaw.selected_depth, 'none'), estimated_duration_minutes: numberValue(lectureRaw.estimated_duration_minutes), selection_reason: stringValue(lectureRaw.selection_reason), learning_objectives: lectureRaw.learning_objectives.filter((line): line is string => typeof line === 'string'), sections: lectureSections, common_failure_mode: nullableString(lectureRaw.common_failure_mode), recap: lectureRaw.recap.filter((line): line is string => typeof line === 'string'), retrieval_check: { prompt: nullableString(recordValue(lectureRaw.retrieval_check).prompt), answer_rule: nullableString(recordValue(lectureRaw.retrieval_check).answer_rule) }, transfer_exercise: { prompt: nullableString(recordValue(lectureRaw.transfer_exercise).prompt), format: nullableString(recordValue(lectureRaw.transfer_exercise).format) } },
     assessment: { mode: stringValue(assessmentRaw.mode, 'none'), blueprint_id: nullableString(assessmentRaw.blueprint_id), blueprint_version: nullableString(assessmentRaw.blueprint_version), topic_coverage: coverage, calibrated_difficulty: { score: numberValue(recordValue(assessmentRaw.calibrated_difficulty).score), factors: arrayValue(recordValue(assessmentRaw.calibrated_difficulty).factors).filter((line): line is string => typeof line === 'string') }, validation_state: stringValue(assessmentRaw.validation_state, 'none'), answer_rules: { type: stringValue(answerRulesRaw.type, 'none'), partial_credit: stringValue(answerRulesRaw.partial_credit) }, score: { earned: numberValue(scoreRaw.earned), possible: numberValue(scoreRaw.possible), confidence: numberValue(scoreRaw.confidence) }, mastery_impact_cap: { max_level_band_delta: numberValue(capRaw.max_level_band_delta), max_score_delta: numberValue(capRaw.max_score_delta) }, review },
     mastery_evidence: mastery, recommended_next_activity: (() => { const next = recordValue(raw.recommended_next_activity); return { domain_id: nullableString(next.domain_id), topic_id: nullableString(next.topic_id), format: nullableString(next.format), level_band: nullableString(next.level_band), reason: stringValue(next.reason), estimated_duration_minutes: numberValue(next.estimated_duration_minutes) } })(), learner_explanation: stringValue(raw.learner_explanation), claude_cli: { available: claudeRaw.available === true, status: stringValue(claudeRaw.status, 'unavailable'), notice: stringValue(claudeRaw.notice), job_id: nullableString(claudeRaw.job_id), exit_code: nullableNumber(claudeRaw.exit_code), stdout: stringValue(claudeRaw.stdout), stderr: stringValue(claudeRaw.stderr), changed_files: changedFiles }, metadata: { agent_name: stringValue(metadataRaw.agent_name, 'Embedded Systems Learning Coach'), timestamp: stringValue(metadataRaw.timestamp), request_id: nullableString(metadataRaw.request_id) },
+    ...(isRecord(raw.mastery_delta) && { mastery_delta: { before: numberValue(raw.mastery_delta.before), after: numberValue(raw.mastery_delta.after), delta: numberValue(raw.mastery_delta.delta), band_before: stringValue(raw.mastery_delta.band_before, 'Basic'), band_after: stringValue(raw.mastery_delta.band_after, 'Basic') } }),
   }
 }
 
@@ -362,6 +363,8 @@ function EmbedPathApp() {
   const [transferStatus, setTransferStatus] = useState<'idle' | 'grading' | 'error'>('idle')
   const [transferError, setTransferError] = useState<string | null>(null)
   const [waitingNext, setWaitingNext] = useState(false)
+  // Items graded in this tab (saved.responses covers the ones graded earlier).
+  const [gradedNow, setGradedNow] = useState<string[]>([])
   // Generated items are kept sorted by slot; the displayed question is tracked by slot so a late or retried question inserted before it never shifts the view.
   const assessmentIndex = generated ? Math.max(0, generated.items.findIndex((item) => itemSlot(item) === currentSlot)) : rawIndex
 
@@ -407,6 +410,14 @@ function EmbedPathApp() {
     }
   }, [authFetch])
   useEffect(() => { void loadSavedData() }, [loadSavedData])
+  // Sessions and items without the abandoned ones, which stay in the database but never reach the UI.
+  const loadAssessmentData = useCallback(async () => {
+    const [sessionsBody, itemsBody, responsesBody] = await Promise.all(['/api/assessment_sessions', '/api/assessment_items', '/api/assessment_responses'].map((route) => authFetch(route).then((res) => res.json() as Promise<unknown>)))
+    const rows = (body: unknown) => { const data = recordValue(body).data; if (!Array.isArray(data)) throw new Error('Saved assessment data could not be loaded.'); return data.filter(isRecord) }
+    const all = rows(sessionsBody)
+    const abandoned = new Set(all.filter((session) => session.status === 'abandoned').map((session) => stringValue(session.id)))
+    return { sessions: all.filter((session) => session.status !== 'abandoned'), items: rows(itemsBody).filter((item) => !abandoned.has(stringValue(item.session_id))), responses: rows(responsesBody) }
+  }, [authFetch])
   // The grade route persists the response and mastery; re-read mastery and stop showing sample data over it.
   const refreshMastery = useCallback(async () => {
     try {
@@ -416,12 +427,13 @@ function EmbedPathApp() {
       const mastery = body.data.filter(isRecord)
       // Header stats count graded responses, so refresh them too (best effort).
       const responses = await authFetch('/api/assessment_responses').then((res) => res.json()).then((payload: unknown) => isRecord(payload) && Array.isArray(payload.data) ? payload.data.filter(isRecord) : null).catch(() => null)
-      setSaved((current) => ({ ...current, mastery, ...(responses && { responses }) }))
+      const assessmentData = await loadAssessmentData().catch(() => null)
+      setSaved((current) => ({ ...current, mastery, ...(responses && { responses }), ...(assessmentData && { assessmentSessions: assessmentData.sessions, assessmentItems: assessmentData.items }) }))
       setSampleData(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Updated mastery could not be loaded.')
     }
-  }, [authFetch])
+  }, [authFetch, loadAssessmentData])
 
   const realActivity = useMemo(() => normalizeActivity(saved.activities[0]), [saved.activities])
   const activeActivity = sampleData ? SAMPLE_ACTIVITY : realActivity ?? EMPTY_ACTIVITY
@@ -541,9 +553,43 @@ function EmbedPathApp() {
     setGenerated({ ...generated, missing: [], pending: slots.length })
     void generateSlots(generated.sessionId, slots)
   }
+  // An unfinished session for the same scope (one topic, or the mixed diagnostic) is resumed instead of starting another one.
+  const findResumable = (sessions: JsonRecord[], responses: JsonRecord[], scope: { domainId: string; topicId: string } | null) => [...sessions]
+    .sort((a, b) => stringValue(b.created_at).localeCompare(stringValue(a.created_at)))
+    .find((session) => {
+      if (session.status !== 'in_progress') return false
+      const plan = arrayValue(recordValue(session.timing_policy).plan)
+      const answered = new Set(responses.filter((response) => stringValue(response.session_id) === stringValue(session.id)).map((response) => stringValue(response.item_id))).size
+      if (plan.length === 0 || answered >= plan.length) return false
+      const coverage = arrayValue(session.topic_coverage).filter(isRecord)
+      return scope ? coverage.every((entry) => stringValue(entry.domain_id) === scope.domainId && stringValue(entry.topic_id) === scope.topicId) : new Set(coverage.map((entry) => `${stringValue(entry.domain_id)}/${stringValue(entry.topic_id)}`)).size > 1
+    })
+  const resumeAssessment = (session: JsonRecord, allItems: JsonRecord[], responses: JsonRecord[], scope: { domainId: string; topicId: string } | null) => {
+    const sessionId = stringValue(session.id)
+    const plan = arrayValue(recordValue(session.timing_policy).plan).filter(isRecord)
+    const items = allItems.filter((item) => stringValue(item.session_id) === sessionId).reduce<JsonRecord[]>((list, item) => insertBySlot(list, item), [])
+    const done = new Set(responses.map((response) => stringValue(response.item_id)))
+    const absent = plan.map((entry) => numberValue(entry.slot)).filter((slot) => !items.some((item) => itemSlot(item) === slot))
+    const open = items.find((item) => !done.has(stringValue(item.id)))
+    setGenerated({ sessionId, total: plan.length, items, coverage: arrayValue(session.topic_coverage).filter(isRecord).map((entry) => ({ domain_id: stringValue(entry.domain_id), topic_id: stringValue(entry.topic_id), weight: numberValue(entry.weight), subtopic: stringValue(entry.subtopic) })), pending: absent.length, missing: [] })
+    setAssessmentScope(scope)
+    clearWorkspace()
+    setCurrentSlot(itemSlot(open ?? items[items.length - 1]))
+    setWaitingNext(!open && absent.length > 0)
+    setView('assessment')
+    toast.success(open ? `Resuming your assessment at question ${itemSlot(open) + 1} of ${plan.length}.` : 'Resuming your assessment. The next question is still being written.')
+    if (absent.length > 0) void generateSlots(sessionId, absent)
+  }
   const startAssessment = async (scope: { domainId: string; topicId: string } | null) => {
     if (generating) return
     setGenerating(true)
+    const fresh = await loadAssessmentData().catch(() => null)
+    const resumable = findResumable(fresh?.sessions ?? saved.assessmentSessions, fresh?.responses ?? saved.responses, scope)
+    if (resumable) {
+      resumeAssessment(resumable, fresh?.items ?? saved.assessmentItems, fresh?.responses ?? saved.responses, scope)
+      setGenerating(false)
+      return
+    }
     const toastId = toast.loading(scope ? `Claude is writing your ${topicLabel(scope.domainId, scope.topicId)} question…` : 'Claude is writing your first question…')
     try {
       const data = await postGenerate(scope ? { domain_id: scope.domainId, topic_id: scope.topicId, topic_label: topicLabel(scope.domainId, scope.topicId) } : undefined)
@@ -568,13 +614,37 @@ function EmbedPathApp() {
   const openAssessment = () => startAssessment(null)
   const openTopicAssessment = (domainId: string, topicId: string) => startAssessment({ domainId, topicId })
   const advanceAssessment = (item?: JsonRecord) => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); if (item) setCurrentSlot(itemSlot(item)) }
-  const handleNextAssessment = () => {
+  const answeredIds = useMemo(() => new Set([...saved.responses.map((response) => stringValue(response.item_id)), ...gradedNow]), [saved.responses, gradedNow])
+  // First slot after `slot` (then earlier ones) whose question has not been graded yet; slots without a question yet count as open.
+  const nextUnanswered = (gen: NonNullable<typeof generated>, slot: number, justGraded?: string): number | null => {
+    for (let step = 1; step < gen.total; step++) {
+      const candidate = (slot + step) % gen.total
+      const item = gen.items.find((entry) => itemSlot(entry) === candidate)
+      if (!item || !(answeredIds.has(stringValue(item.id)) || stringValue(item.id) === justGraded)) return candidate
+    }
+    return null
+  }
+  const openSlot = (gen: NonNullable<typeof generated>, slot: number) => {
+    const item = gen.items.find((entry) => itemSlot(entry) === slot)
+    if (item) { advanceAssessment(item); setView('assessment'); return }
+    if (gen.pending > 0) toast.info(`Question ${slot + 1} is still being written. Try again in a moment.`)
+    else { toast.info(`Question ${slot + 1} is missing; retrying it now.`); retryMissing() }
+  }
+  const handleNextAssessment = async () => {
     if (!generated) { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); setRawIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)); return }
-    if (currentSlot + 1 >= generated.total) return
-    const next = nextAvailable(generated, currentSlot)
-    if (next === 'wait' && generated.pending > 0) { setWaitingNext(true); toast.info(`Question ${currentSlot + 2} is still being written. You will move on automatically.`); return }
-    if (next === null || next === 'wait') { toast.error('The next question is missing because it could not be generated. Use Retry above the question.'); return }
-    advanceAssessment(next)
+    if (!answerText.trim() && selectedAnswers.length === 0) return
+    setLoading(true); setStatusMessage(null)
+    const justGraded = stringValue(generated.items[Math.min(assessmentIndex, generated.items.length - 1)]?.id)
+    const result = await gradeCurrent()
+    setLoading(false)
+    if (!result) return
+    if (result.mastery_delta) toast.success(`${result.mastery_delta.delta >= 0 ? '+' : ''}${result.mastery_delta.delta} (${result.mastery_delta.after})`)
+    const next = nextUnanswered(generated, currentSlot, justGraded)
+    if (next === null || result.session_progress?.completed) { showReview(result); return }
+    const item = generated.items.find((entry) => itemSlot(entry) === next)
+    if (item) { advanceAssessment(item); return }
+    if (generated.pending > 0) { setWaitingNext(true); toast.info(`Question ${next + 1} is still being written. You will move on automatically.`); return }
+    toast.error(`Question ${next + 1} is missing because it could not be generated. Use Retry above the question.`)
   }
   useEffect(() => {
     if (!waitingNext || !generated) return
@@ -597,6 +667,8 @@ function EmbedPathApp() {
       if (!response.ok || resultRecord.success !== true || responseRecord.status !== 'success') { const messageText = stringValue(responseRecord.message, stringValue(resultRecord.error, 'Claude CLI could not complete this request.')); setDataError(messageText); toast.error(messageText); return null }
       const normalized = normalizeCoachResult(responseRecord.result, responseRecord.metadata)
       if (!normalized) { const messageText = 'Claude CLI response did not match the saved learning schema. Nothing was marked complete.'; setDataError(messageText); toast.error(messageText); return null }
+      const progress = recordValue(resultRecord.session_progress)
+      if (hasOwn(progress, 'total')) normalized.session_progress = { answered: numberValue(progress.answered), total: numberValue(progress.total), completed: progress.completed === true }
       if (resultRecord.replayed === true) return { ...normalized, replayed: { selected_answers: Array.isArray(resultRecord.selected_answers) ? resultRecord.selected_answers.filter((entry): entry is string => typeof entry === 'string') : [] } }
       return normalized
     } catch (error) {
@@ -740,15 +812,23 @@ function EmbedPathApp() {
     if (result) { setReview(result); setHints(result.hints); setClaudeState(fallbackClaudeFromReview(result)); setView('review'); await persistAttempt(result) }
     setLoading(false)
   }
-  const submitAssessment = async () => {
-    if (!answerText.trim() && selectedAnswers.length === 0) return
-    setLoading(true); setStatusMessage(null)
+  // Server-side grading is idempotent per item_id, so Submit and Save & next share this path.
+  const gradeCurrent = async () => {
     const currentItem = generated ? generated.items[Math.min(assessmentIndex, generated.items.length - 1)] : undefined
     const itemId = stringValue(currentItem?.id) || undefined
+    if (generated && !itemId) { toast.error('This question has no saved id. Reload the page and resume the assessment.'); return null }
     const result = itemId
       ? await requestCoach('', undefined, { url: '/api/assessment/grade', body: { item_id: itemId, selected_answers: selectedAnswers.length > 0 ? selectedAnswers : [answerText], confidence, justification } })
       : await requestCoach(`request_type: assessment_submission\nitem_id: ${itemId ?? 'none'}\nmode: ${assessmentMeta.mode}\nquestion_index: ${assessmentIndex + 1}\nquestion: ${assessmentQuestion.stem}\nselected_answers: ${selectedAnswers.join(' | ') || answerText}\nconfidence: ${confidence || 'not supplied'}\nwritten justification: ${justification}\nassessment metadata: ${JSON.stringify(assessmentMeta)}\nDo not reveal correctness during the active assessment. After submission, return the complete structured review with valid or excluded items, misconception analysis, bounded mastery impact, explanations, remediation, and the Claude CLI runtime state.`, itemId)
-    if (result) { setReview(result); setHints(result.hints); setClaudeState(fallbackClaudeFromReview(result)); setView('review'); if (itemId) await refreshMastery(); if (generated && generated.missing.length > 0) toast.warning(`${generated.items.length} of ${generated.total} questions were generated; this assessment is incomplete.`) }
+    if (result && itemId) { setGradedNow((current) => [...current, itemId]); await refreshMastery() }
+    return result
+  }
+  const showReview = (result: ReviewData) => { setReview(result); setHints(result.hints); setClaudeState(fallbackClaudeFromReview(result)); setView('review'); if (generated && generated.missing.length > 0) toast.warning(`${generated.items.length} of ${generated.total} questions were generated; this assessment is incomplete.`) }
+  const submitAssessment = async () => {
+    if (!answerText.trim() && selectedAnswers.length === 0) return
+    setLoading(true); setStatusMessage(null)
+    const result = await gradeCurrent()
+    if (result) showReview(result)
     setLoading(false)
   }
   const saveDraft = async () => {
@@ -800,6 +880,12 @@ function EmbedPathApp() {
     if (ref) return { kind: 'practice' as const, domainId: stringValue(ref.domain_id), topicId: stringValue(ref.topic_id), label: 'Start next exercise' }
     return { kind: 'map' as const, domainId: '', topicId: '', label: 'Choose a topic in Skill Map' }
   })()
+  // After an assessment answer, offer the next ungraded question of the same session before moving on to an exercise.
+  const nextQuestion = (() => {
+    if (!generated || !review?.session_progress || review.session_progress.completed) return null
+    const next = nextUnanswered(generated, currentSlot)
+    return next === null ? null : { label: `Next question (${next + 1}/${generated.total})`, onClick: () => openSlot(generated, next) }
+  })()
   const startNextActivity = () => {
     if (!nextStep) return
     if (nextStep.kind === 'practice') void openTopicPractice(nextStep.domainId, nextStep.topicId, false, true)
@@ -810,8 +896,8 @@ function EmbedPathApp() {
   const renderView = () => {
     if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={openRecentPractice} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} domainOptions={DOMAIN_TOPIC_OPTIONS} onStartLearningTopic={startTopicLesson} onStartAssessmentTopic={openTopicAssessment} topicActionLoading={loading} />
     if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => { if (generated) { const item = generated.items[Math.min(assessmentIndex + 1, generated.items.length - 1)]; if (item) setCurrentSlot(itemSlot(item)) } else setRawIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)) }} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
-    if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
-    if (view === 'review' && review) return <ResultSection data={review} onStartNext={startNextActivity} nextLabel={nextStep?.label ?? 'Choose a topic in Skill Map'} starting={practiceLoad?.status === 'loading'} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} loading={loading} statusMessage={statusMessage} />
+    if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} currentAnswered={Boolean(generated && answeredIds.has(stringValue(generated.items[Math.min(assessmentIndex, generated.items.length - 1)]?.id)))} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
+    if (view === 'review' && review) return <ResultSection data={review} onStartNext={startNextActivity} nextQuestion={nextQuestion} nextLabel={nextStep?.label ?? 'Choose a topic in Skill Map'} starting={practiceLoad?.status === 'loading'} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} loading={loading} statusMessage={statusMessage} />
     if (view === 'lesson' && lesson) {
       const domain = findDomain(lesson.domainId); const topic = findTopic(lesson.domainId, lesson.topicId)
       const hasRow = (topicId: string) => saved.mastery.some((item) => stringValue(item.domain_id) === lesson.domainId && stringValue(item.topic_id) === topicId)

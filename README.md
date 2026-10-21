@@ -126,13 +126,9 @@ npx tsx scripts/gen-cleanup-topic-mastery.ts
 - **Cost and abuse.** Registration is open and every AI request uses the host's Claude account.
   The only guard is the 4-process cap. Add per-user rate limits or disable public registration
   before exposing the app to others.
-- **Leftover Lyzr routes.** `/api/agent`, `/api/upload`, `/api/rag`, `/api/scheduler` and `/api/voice/session`
-  come from the original template, are no longer used by the UI, and are **not authenticated**.
-  They only work if `LYZR_API_KEY` is set; leave it unset or delete the routes.
 - **Cached lessons are generic.** A cached lesson is not adapted to the learner's level.
   Delete its row in `topic_lessons` to have Claude rewrite it.
 - **Assessment progress.** "Save & next" advances without saving that answer; each question is
   graded when you press Submit.
 - **Hardcoded UI numbers.** The header's "6 day streak" and "12 exercises" are placeholders.
-- **Type checking is off in builds** (`ignoreBuildErrors: true`). Run `npx tsc --noEmit` yourself.
-  `npm run lint` uses `next lint`, which Next 16 removed; run `npx eslint .` instead.
+- **Lint.** `npm run lint` uses `next lint`, which Next 16 removed; run `npx eslint .` instead.

@@ -14,6 +14,17 @@ export const runtime = 'nodejs'
 // so a re-submit returns the stored result and never applies mastery twice. When the last planned
 // question of a session gets its response, the session is marked completed in the same transaction.
 
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0]
+
+// Planned slots vs graded items of the item's session; sessions without a plan (seed) report total 0.
+async function sessionProgress(tx: Tx, ownerId: string, sessionId: string) {
+  const [session] = await tx.select().from(assessment_sessions).where(and(eq(assessment_sessions.owner_user_id, ownerId), eq(assessment_sessions.id, sessionId))).limit(1)
+  const total = ((session?.timing_policy as { plan?: unknown[] } | undefined)?.plan ?? []).length
+  const [row] = await tx.select({ n: sql<number>`count(distinct ${assessment_responses.item_id})::int` }).from(assessment_responses).where(and(eq(assessment_responses.owner_user_id, ownerId), eq(assessment_responses.session_id, sessionId)))
+  const answered = Number(row?.n ?? 0)
+  return { answered, total, completed: session?.status === 'completed' }
+}
+
 type AnswerKey = { correct_options?: string[]; explanation?: string; misconception?: string }
 
 const CONFIDENCE: Record<string, number> = { low: 0.3, medium: 0.6, high: 0.9 }
@@ -109,7 +120,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       // Serialize concurrent submits of the same item so only one of them applies mastery.
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`grade:${ownerId}:${item.id}`}))`)
       const [existing] = await tx.select().from(assessment_responses).where(and(eq(assessment_responses.owner_user_id, ownerId), eq(assessment_responses.item_id, item.id))).limit(1)
-      if (existing) return { result: existing.feedback, replayed: true as const, selected_answers: existing.selected_answers }
+      if (existing) return { result: existing.feedback, replayed: true as const, selected_answers: existing.selected_answers, session_progress: await sessionProgress(tx, ownerId, item.session_id) }
 
       const [current] = await tx.select().from(topic_mastery).where(and(eq(topic_mastery.owner_user_id, ownerId), eq(topic_mastery.domain_id, domainId), eq(topic_mastery.topic_id, topicId))).limit(1)
       const before = Number(current?.score ?? 0)
@@ -124,9 +135,11 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       const previous = (current?.evidence_summary as { evidence?: unknown } | undefined)?.evidence
       const summary = { state: 'assessed', evidence: [...(Array.isArray(previous) ? previous : []), ...evidence.evidence].slice(-5), recommended_focus: evidence.recommended_focus }
 
+      // Stored inside the feedback JSON, so a replay returns the same before/after numbers.
+      const stamped = { ...result, mastery_delta: { before, after, delta: after - before, band_before: BANDS[beforeBand], band_after: newBand } }
       await tx.insert(assessment_responses).values({
         item_id: item.id, session_id: item.session_id, selected_answers: chosen, justification, response_time_ms: 0,
-        partial_credit: String(result.assessment.score.earned), feedback: result, challenge_state: 'completed', mastery_evidence: result.mastery_evidence, owner_user_id: ownerId,
+        partial_credit: String(result.assessment.score.earned), feedback: stamped, challenge_state: 'completed', mastery_evidence: result.mastery_evidence, owner_user_id: ownerId,
       })
       if (current) await tx.update(topic_mastery).set({ score: String(after), level_band: newBand, confidence: String(Math.max(0, Math.min(1, Number((beforeConfidence + confidenceDelta).toFixed(2))))), evidence_summary: summary }).where(eq(topic_mastery.id, current.id))
       else await tx.insert(topic_mastery).values({ domain_id: domainId, topic_id: topicId, pack_version: item.blueprint_version, score: String(after), level_band: newBand, confidence: String(confidenceDelta), evidence_summary: summary, owner_user_id: ownerId })
@@ -141,12 +154,13 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         event_type: 'assessment', domain_id: domainId, topic_id: topicId, evidence: { item_id: item.id, earned: result.assessment.score.earned, mastery_evidence: result.mastery_evidence },
         score_delta: String(after - before), confidence_delta: String(confidenceDelta), owner_user_id: ownerId,
       })
-      return { result, replayed: false as const, selected_answers: chosen }
+      return { result: stamped, replayed: false as const, selected_answers: chosen, session_progress: await sessionProgress(tx, ownerId, item.session_id) }
     })
 
     return NextResponse.json({
       success: true,
       response: { status: 'success', result: stored.result, metadata: { agent_name: 'Assessment grader', timestamp: new Date().toISOString(), request_id: null } },
+      session_progress: stored.session_progress,
       ...(stored.replayed && { replayed: true, selected_answers: stored.selected_answers }),
     })
   } catch (error) {
