@@ -24,6 +24,7 @@ const domains = [
   { domain_id: 'linux', topic_id: firstTopic('linux'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map shell and file-handling fundamentals.' },
   { domain_id: 'networking', topic_id: firstTopic('networking'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map the TCP/IP layering model.' },
   { domain_id: 'bsp', topic_id: firstTopic('bsp'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map cross-compilation and toolchain fundamentals.' },
+  { domain_id: 'qnx', topic_id: firstTopic('qnx'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map the QNX microkernel and message-passing model.' },
 ]
 
 // Concurrent calls for one user share one run (singleFlight); the advisory lock inside the transaction also
@@ -80,7 +81,7 @@ export const POST = authMiddleware(async (_req: NextRequest) => {
           owner_user_id: ownerId,
           activity_id: activity.id,
           activity_metadata: { domain: 'C', topic: topicLabel('c', SEED_ACTIVITY_TOPIC), level_band: 'Basic', format: 'Mixed diagnostic', estimated_duration_minutes: 12 },
-          rationale: 'A mixed diagnostic gives the coach evidence across all five domain packs before recommending practice.',
+          rationale: 'A mixed diagnostic gives the coach evidence across all domain packs before recommending practice.',
           status: 'queued',
         })
       }

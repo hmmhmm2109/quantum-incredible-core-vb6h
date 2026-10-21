@@ -1,5 +1,5 @@
 -- GENERATED FILE - do not edit by hand. Regenerate with: npx tsx scripts/gen-cleanup-topic-mastery.ts
--- One-off, idempotent cleanup: remove topic_mastery rows whose (domain_id, topic_id) is not in lib/taxonomy.ts (51 topics).
+-- One-off, idempotent cleanup: remove topic_mastery rows whose (domain_id, topic_id) is not in lib/taxonomy.ts (63 topics).
 -- Not run automatically. Review the SELECT preview first, then run the DELETE (e.g. psql "$DATABASE_URL" -f scripts/cleanup-topic-mastery.sql).
 -- Regenerate whenever lib/taxonomy.ts changes.
 
@@ -55,7 +55,19 @@ WITH valid(domain_id, topic_id) AS (VALUES
     ('bsp', 'drivers'),
     ('bsp', 'dma-cache'),
     ('bsp', 'clock-power'),
-    ('bsp', 'board-bring-up')
+    ('bsp', 'board-bring-up'),
+    ('qnx', 'microkernel-architecture'),
+    ('qnx', 'message-passing'),
+    ('qnx', 'scheduling-priorities'),
+    ('qnx', 'threads-synchronization'),
+    ('qnx', 'processes-memory'),
+    ('qnx', 'interrupts-timers'),
+    ('qnx', 'resource-managers'),
+    ('qnx', 'boot-startup'),
+    ('qnx', 'networking-io-pkt'),
+    ('qnx', 'filesystems-storage'),
+    ('qnx', 'debugging-tracing'),
+    ('qnx', 'safety-availability')
 )
 SELECT m.* FROM topic_mastery m
 WHERE NOT EXISTS (SELECT 1 FROM valid v WHERE v.domain_id = m.domain_id AND v.topic_id = m.topic_id);
@@ -112,7 +124,19 @@ WITH valid(domain_id, topic_id) AS (VALUES
     ('bsp', 'drivers'),
     ('bsp', 'dma-cache'),
     ('bsp', 'clock-power'),
-    ('bsp', 'board-bring-up')
+    ('bsp', 'board-bring-up'),
+    ('qnx', 'microkernel-architecture'),
+    ('qnx', 'message-passing'),
+    ('qnx', 'scheduling-priorities'),
+    ('qnx', 'threads-synchronization'),
+    ('qnx', 'processes-memory'),
+    ('qnx', 'interrupts-timers'),
+    ('qnx', 'resource-managers'),
+    ('qnx', 'boot-startup'),
+    ('qnx', 'networking-io-pkt'),
+    ('qnx', 'filesystems-storage'),
+    ('qnx', 'debugging-tracing'),
+    ('qnx', 'safety-availability')
 )
 DELETE FROM topic_mastery m
 WHERE NOT EXISTS (SELECT 1 FROM valid v WHERE v.domain_id = m.domain_id AND v.topic_id = m.topic_id);

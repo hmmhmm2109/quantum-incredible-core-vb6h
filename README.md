@@ -1,7 +1,7 @@
 # EmbedPath
 
-An adaptive, practice-first tutor for embedded-systems engineers. It covers five domains
-(C, C++, Linux, Networking, BSP) and tracks a separate mastery level per domain and topic.
+An adaptive, practice-first tutor for embedded-systems engineers. It covers six domains
+(C, C++, Linux, Networking, BSP, QNX) and tracks a separate mastery level per domain and topic.
 
 Everything the AI writes (assessment questions, lessons, practice exercises, coaching feedback)
 is produced by **Claude CLI running on the host machine**, using that machine's existing
@@ -69,7 +69,7 @@ the app sees it. Errors are reduced to a safe message; stderr stays in the serve
 
 | Route | Purpose |
 |---|---|
-| `POST /api/assessment/generate` | No body: starts a diagnostic (plans 5 slots, returns question 1). `{ session_id, slot }`: writes another slot. `{ domain_id, topic_id, topic_label }`: starts a 3-question topic assessment. |
+| `POST /api/assessment/generate` | No body: starts a diagnostic (plans one slot per domain, returns question 1). `{ session_id, slot }`: writes another slot. `{ domain_id, topic_id, topic_label }`: starts a 3-question topic assessment. |
 | `POST /api/assessment/grade` | `{ item_id, selected_answers, ... }`. Grades one item against its stored answer key and returns a full review. In one transaction it also saves the `assessment_responses` row, updates `topic_mastery` (score moves toward the evidence, at most ±8 per submit; level band moves at most one step; confidence is capped) and adds a `learning_events` row. Idempotent per item (advisory lock): a repeat submit returns the saved result with `replayed: true` and applies mastery only once. |
 | `POST /api/assessment/cleanup` | Marks the account's `in_progress` sessions older than 24 hours that have no graded response as `abandoned`. Nothing is deleted; stale sessions that already have a response are left alone. `grade` sets a session to `completed` once every planned question has a response. The app calls it on load. |
 | `POST /api/lesson` | `{ domain_id, topic_id, part: "lecture" \| "practice", action?, regenerate? }`. Cached in `topic_lessons`. `action` is `shorter`, `another-example`, `prerequisites` or `adapt` (rewrites the lecture for the learner's open gaps, latest 8, cached as `lecture:adapted`; unknown actions return 400). |
@@ -101,7 +101,7 @@ lib/app-types.ts        shared page types; sample-data, assessment-slots, assess
 app/api/                route handlers
 lib/claude-cli.ts       Claude CLI runner
 lib/coach-schema.ts     JSON schemas for coach output
-lib/taxonomy.ts         single source of truth: 5 domains, 51 topics in learning order (with prerequisites), 4 sub-topics each
+lib/taxonomy.ts         single source of truth: 6 domains, 63 topics in learning order (with prerequisites), 4 sub-topics each
 lib/assessment-topics.ts  view over the taxonomy: sub-topic pool and helpers for planning a diagnostic
 lib/learning-topics.ts  view over the taxonomy: topic picker options (shared by UI and /api/lesson)
 lib/single-flight.ts    de-duplicates concurrent identical server calls
