@@ -39,16 +39,33 @@ function spawnClaude({ systemPrompt, message, jsonSchema, timeoutMs = DEFAULT_TI
     })
     child.stdin.end()
 
-    let stdout = ''
-    let stderr = ''
+    // Output is collected as Buffers and capped by bytes; decoding happens once at the end,
+    // so a multibyte character is never cut in the middle by the cap.
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    let stdoutBytes = 0
+    let stderrBytes = 0
     let settled = false
     let timedOut = false
 
-    const append = (current: string, chunk: Buffer) =>
-      Buffer.byteLength(current) >= MAX_OUTPUT_BYTES ? current : (current + chunk.toString('utf8')).slice(0, MAX_OUTPUT_BYTES)
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 2_000).unref()
+    }, timeoutMs)
 
-    child.stdout.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk) })
-    child.stderr.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk) })
+    const collect = (chunks: Buffer[], used: number, chunk: Buffer) => {
+      const room = MAX_OUTPUT_BYTES - used
+      if (room <= 0) return 0
+      const kept = chunk.length > room ? chunk.subarray(0, room) : chunk
+      chunks.push(kept)
+      return kept.length
+    }
+    // Decoding a Buffer cut mid-character yields U+FFFD at the end only; drop it.
+    const decode = (chunks: Buffer[]) => Buffer.concat(chunks).toString('utf8').replace(/\uFFFD$/, '')
+
+    child.stdout.on('data', (chunk: Buffer) => { stdoutBytes += collect(stdout, stdoutBytes, chunk) })
+    child.stderr.on('data', (chunk: Buffer) => { stderrBytes += collect(stderr, stderrBytes, chunk) })
     child.on('error', (error) => {
       if (settled) return
       settled = true
@@ -59,14 +76,8 @@ function spawnClaude({ systemPrompt, message, jsonSchema, timeoutMs = DEFAULT_TI
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ exitCode, stdout, stderr, timedOut })
+      resolve({ exitCode, stdout: decode(stdout), stderr: decode(stderr), timedOut })
     })
-
-    const timer = setTimeout(() => {
-      timedOut = true
-      child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 2_000).unref()
-    }, timeoutMs)
   })
 }
 
@@ -108,7 +119,7 @@ export async function runClaudeJson(options: RunOptions): Promise<unknown> {
     throw new ClaudeCliError('Claude CLI returned an empty response', 502)
   } catch (error) {
     if (error instanceof ClaudeCliError) throw error
-    if (error instanceof Error && error.message.includes('ENOENT')) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
       throw new ClaudeCliError('Claude CLI is not installed or not available on PATH for the Next.js process.', 503)
     }
     throw error

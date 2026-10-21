@@ -1,7 +1,7 @@
 import { authMiddleware, getCurrentUserId, getDb, scopedRepo } from 'lyzr-architect-pg'
 import { and, eq, sql } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
-import { assessment_items, assessment_responses, learning_events, topic_mastery } from '@/lib/db/schema'
+import { assessment_items, assessment_responses, assessment_sessions, learning_events, topic_mastery } from '@/lib/db/schema'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -11,7 +11,8 @@ export const runtime = 'nodejs'
 // The response has the same shape as the coach result that app/page.tsx already renders.
 // The result is also persisted here, in one transaction: the response row, the topic mastery
 // update (bounded by mastery_impact_cap) and a learning event. Grading is idempotent per item,
-// so a re-submit returns the stored result and never applies mastery twice.
+// so a re-submit returns the stored result and never applies mastery twice. When the last planned
+// question of a session gets its response, the session is marked completed in the same transaction.
 
 type AnswerKey = { correct_options?: string[]; explanation?: string; misconception?: string }
 
@@ -129,6 +130,13 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       })
       if (current) await tx.update(topic_mastery).set({ score: String(after), level_band: newBand, confidence: String(Math.max(0, Math.min(1, Number((beforeConfidence + confidenceDelta).toFixed(2))))), evidence_summary: summary }).where(eq(topic_mastery.id, current.id))
       else await tx.insert(topic_mastery).values({ domain_id: domainId, topic_id: topicId, pack_version: item.blueprint_version, score: String(after), level_band: newBand, confidence: String(confidenceDelta), evidence_summary: summary, owner_user_id: ownerId })
+      // Complete the session once every planned slot (timing_policy.plan) has a response; seed sessions without a plan are left alone.
+      const [session] = await tx.select().from(assessment_sessions).where(and(eq(assessment_sessions.owner_user_id, ownerId), eq(assessment_sessions.id, item.session_id))).limit(1)
+      const planned = ((session?.timing_policy as { plan?: unknown[] } | undefined)?.plan ?? []).length
+      if (session?.status === 'in_progress' && planned > 0) {
+        const [answered] = await tx.select({ n: sql<number>`count(distinct ${assessment_responses.item_id})::int` }).from(assessment_responses).where(and(eq(assessment_responses.owner_user_id, ownerId), eq(assessment_responses.session_id, session.id)))
+        if (Number(answered?.n ?? 0) >= planned) await tx.update(assessment_sessions).set({ status: 'completed' }).where(eq(assessment_sessions.id, session.id))
+      }
       await tx.insert(learning_events).values({
         event_type: 'assessment', domain_id: domainId, topic_id: topicId, evidence: { item_id: item.id, earned: result.assessment.score.earned, mastery_evidence: result.mastery_evidence },
         score_delta: String(after - before), confidence_delta: String(confidenceDelta), owner_user_id: ownerId,

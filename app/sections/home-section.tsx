@@ -37,6 +37,8 @@ export type HomeRecommendation = {
   duration: number
   rationale: string
   isReal: boolean
+  // When set, the primary button runs this topic action instead of opening the practice workspace.
+  action?: { kind: 'assess' | 'learn'; domainId: string; topicId: string; label: string }
 }
 
 type TopicOption = { id: string; label: string }
@@ -162,8 +164,8 @@ export default function HomeSection({
                 <span className="font-semibold text-foreground">Why this?</span><br />
                 {recommendation.rationale}
               </div>
-              <Button onClick={onStartPractice} className="min-h-11 gap-2 rounded-xl px-5 shadow-sm active:scale-[0.98] transition-transform">
-                Open practice workspace <ArrowRight className="h-4 w-4" />
+              <Button onClick={() => recommendation.action ? (recommendation.action.kind === 'assess' ? onStartAssessmentTopic : onStartLearningTopic)(recommendation.action.domainId, recommendation.action.topicId) : onStartPractice()} disabled={Boolean(recommendation.action) && topicActionLoading} className="min-h-11 gap-2 rounded-xl px-5 shadow-sm active:scale-[0.98] transition-transform">
+                {recommendation.action?.label ?? 'Open practice workspace'} <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
           </CardContent>

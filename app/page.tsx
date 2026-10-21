@@ -53,15 +53,16 @@ import {
 import { Toaster, toast } from 'sonner'
 import HomeSection, { type HomeAttempt, type HomeDomain, type HomeRecommendation } from '@/app/sections/home-section'
 import PracticeSection, { type AssessmentQuestion, type PracticeActivity } from '@/app/sections/practice-section'
+import LessonSection from '@/app/sections/lesson-section'
 import ResultSection, { type ReviewData } from '@/app/sections/result-section'
 import SkillMapSection, { type SkillDomain, type SkillTopic } from '@/app/sections/skill-map-section'
 import { DOMAIN_TOPIC_OPTIONS, topicLabel } from '@/lib/learning-topics'
-import { DOMAINS } from '@/lib/taxonomy'
+import { DOMAINS, findDomain, findTopic } from '@/lib/taxonomy'
 import { HttpError, withRetry } from '@/lib/retry'
 
 const CLAUDE_RUNTIME = 'claude-cli-oauth'
 
-type ViewName = 'home' | 'practice' | 'assessment' | 'review' | 'skill-map' | 'history' | 'profile'
+type ViewName = 'home' | 'practice' | 'assessment' | 'review' | 'lesson' | 'skill-map' | 'history' | 'profile'
 type JsonRecord = Record<string, unknown>
 
 type SavedState = {
@@ -72,6 +73,7 @@ type SavedState = {
   recommendations: JsonRecord[]
   assessmentSessions: JsonRecord[]
   assessmentItems: JsonRecord[]
+  responses: JsonRecord[]
 }
 
 type ClaudeState = {
@@ -174,6 +176,18 @@ function isRecord(value: unknown): value is JsonRecord {
 function hasOwn(value: JsonRecord, key: string) { return Object.prototype.hasOwnProperty.call(value, key) }
 function stringValue(value: unknown, fallback = '') { return typeof value === 'string' ? value : fallback }
 function nullableString(value: unknown) { return typeof value === 'string' || value === null ? value : null }
+// Real header stats: consecutive local days (ending today or yesterday) with a graded response or attempt, and the total of both.
+function activityStats(saved: SavedState) {
+  const records = [...saved.responses, ...saved.attempts]
+  const dayKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+  const days = new Set(records.map((record) => new Date(stringValue(record.created_at))).filter((date) => !Number.isNaN(date.getTime())).map(dayKey))
+  const cursor = new Date()
+  if (!days.has(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1)
+  let streak = 0
+  while (days.has(dayKey(cursor))) { streak += 1; cursor.setDate(cursor.getDate() - 1) }
+  return { streak, exercises: records.length }
+}
+
 function numberValue(value: unknown, fallback = 0) { return typeof value === 'number' && Number.isFinite(value) ? value : fallback }
 function nullableNumber(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : value === null ? null : null }
 function recordValue(value: unknown): JsonRecord { return isRecord(value) ? value : {} }
@@ -256,6 +270,30 @@ function nextAvailable(gen: { total: number; items: JsonRecord[]; missing: { slo
   return null
 }
 
+type LessonState = { domainId: string; topicId: string; status: 'loading' | 'ready' | 'error'; error: string | null; variant: string | null; practice: 'loading' | 'ready' | 'error'; busy: boolean }
+const LESSON_VARIANTS: Record<string, string> = { 'explain-more': 'Explained in more depth', shorter: 'Shorter version', 'another-example': 'Another example', prerequisites: 'Prerequisites refresher' }
+
+// A topic_mastery row written by "Mark learned" has evidence_summary.state 'learned'; the grade route overwrites it with 'assessed'.
+const isLearnedRow = (item: JsonRecord) => recordValue(item.evidence_summary).state === 'learned'
+// Home "Recommended next" for real data: assess the latest learned-but-unassessed topic, otherwise the next untouched topic in taxonomy order after the latest activity.
+function pickRecommendation(mastery: JsonRecord[]): HomeRecommendation | null {
+  if (mastery.length === 0) return null
+  const touched = new Set(mastery.map((item) => `${stringValue(item.domain_id)}/${stringValue(item.topic_id)}`))
+  const latest = (rows: JsonRecord[]) => rows.reduce<JsonRecord | undefined>((best, item) => (!best || stringValue(item.updated_at) > stringValue(best.updated_at) ? item : best), undefined)
+  const learned = latest(mastery.filter(isLearnedRow))
+  if (learned) {
+    const domain = findDomain(stringValue(learned.domain_id)); const topic = findTopic(stringValue(learned.domain_id), stringValue(learned.topic_id))
+    if (domain && topic) return { title: `Assess ${topic.label}`, description: `You marked ${topic.label} as learned. A short topic assessment turns it into a rating on your skill map.`, domain: domain.label, topic: topic.label, level: 'Not rated', format: 'Assessment', duration: 5, rationale: 'Learned, but not assessed yet.', isReal: true, action: { kind: 'assess', domainId: domain.id, topicId: topic.id, label: 'Assess this topic' } }
+  }
+  const last = latest(mastery)
+  const lastDomain = last ? findDomain(stringValue(last.domain_id)) : undefined
+  const lastIndex = lastDomain?.topics.findIndex((topic) => topic.id === stringValue(last?.topic_id)) ?? -1
+  const afterLast = lastDomain?.topics.slice(lastIndex + 1).find((topic) => !touched.has(`${lastDomain.id}/${topic.id}`))
+  const next = afterLast && lastDomain ? { domain: lastDomain, topic: afterLast } : DOMAINS.flatMap((domain) => domain.topics.map((topic) => ({ domain, topic }))).find(({ domain, topic }) => !touched.has(`${domain.id}/${topic.id}`))
+  if (!next) return null
+  return { title: `Learn ${next.topic.label}`, description: `Next topic in ${next.domain.label}: ${next.topic.subtopics.slice(0, 2).join('; ')}.`, domain: next.domain.label, topic: next.topic.label, level: 'Basic', format: 'Lesson', duration: 15, rationale: 'The next topic in taxonomy order that has no lesson or assessment yet.', isReal: true, action: { kind: 'learn', domainId: next.domain.id, topicId: next.topic.id, label: 'Start lesson' } }
+}
+
 function AuthScreen() {
   const [loginMode, setLoginMode] = useState(true)
   return <main className="min-h-screen bg-background p-4 text-foreground sm:p-8"><div className="mx-auto grid min-h-[calc(100vh-2rem)] max-w-6xl overflow-hidden rounded-3xl border border-border/70 bg-card shadow-sm lg:grid-cols-[1.1fr_0.9fr]"><section className="flex flex-col justify-between bg-muted/40 p-7 sm:p-12"><div><div className="flex items-center gap-3 text-sm font-semibold"><span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Code2 className="h-4 w-4" /></span><span><span className="text-primary">Embed</span>Path</span></div><div className="mt-20 max-w-xl lg:mt-28"><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Practice-first coaching</div><h1 className="mt-4 font-serif text-4xl tracking-tight text-balance sm:text-6xl">Know what to practice next.</h1><p className="mt-5 max-w-lg text-pretty text-base leading-7 text-muted-foreground">An adaptive workspace for C, C++, Linux, Networking, and BSP. Build mastery from evidence, not generic course progress.</p><div className="mt-8 grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-border/70 bg-background/70 p-4"><BrainCircuit className="h-5 w-5 text-primary" /><div className="mt-5 text-sm font-semibold">Independent tracks</div><p className="mt-1 text-xs leading-5 text-muted-foreground">One level per domain and topic.</p></div><div className="rounded-2xl border border-border/70 bg-background/70 p-4"><TerminalSquare className="h-5 w-5 text-primary" /><div className="mt-5 text-sm font-semibold">Concrete feedback</div><p className="mt-1 text-xs leading-5 text-muted-foreground">Tests, reasoning, and safety.</p></div><div className="rounded-2xl border border-border/70 bg-background/70 p-4"><Sparkles className="h-5 w-5 text-primary" /><div className="mt-5 text-sm font-semibold">Adaptive loop</div><p className="mt-1 text-xs leading-5 text-muted-foreground">Practice, learn, retry, transfer.</p></div></div></div></div><div className="mt-12 flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck className="h-4 w-4 text-primary" />Sandboxed tasks never claim production hardware safety without human review.</div></section><section className="flex items-center justify-center p-6 sm:p-12"><div className="w-full max-w-sm"><div className="mb-8"><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{loginMode ? 'Welcome back' : 'Create your learning desk'}</div><h2 className="mt-3 font-serif text-3xl tracking-tight">{loginMode ? 'Continue your practice.' : 'Start with evidence.'}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{loginMode ? 'Sign in to resume your saved attempts and skill map.' : 'Your first session begins with a mixed diagnostic across five domains.'}</p></div>{loginMode ? <LoginForm onSwitchToRegister={() => setLoginMode(false)} /> : <RegisterForm onSwitchToLogin={() => setLoginMode(true)} />}</div></section></div></main>
@@ -273,9 +311,9 @@ function MobileNavigation({ view, onNavigate }: { view: ViewName; onNavigate: (v
   return <div className="overflow-x-auto border-b border-border/70 bg-background px-3 py-2 lg:hidden"><nav className="mx-auto flex min-w-max max-w-6xl gap-1" aria-label="Mobile navigation">{items.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => onNavigate(item.id)} className={`flex min-h-10 items-center gap-2 rounded-xl px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${view === item.id ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}><Icon className="h-3.5 w-3.5" />{item.label}</button> })}</nav></div>
 }
 
-function HeaderBar({ view, displayName, theme, onToggleTheme, sampleData, onToggleSampleData, activeAgentId, onNavigate }: { view: ViewName; displayName: string; theme: 'light' | 'dark'; onToggleTheme: () => void; sampleData: boolean; onToggleSampleData: (checked: boolean) => void; activeAgentId: string | null; onNavigate: (view: ViewName) => void }) {
-  const pageTitle = view === 'home' ? 'Learning desk' : view === 'practice' ? 'Practice workspace' : view === 'assessment' ? 'Assessment workspace' : view === 'review' ? 'Attempt review' : view === 'skill-map' ? 'Your skill map' : view === 'history' ? 'Practice history' : 'Profile & preferences'
-  return <header className="border-b border-border/70 bg-background/90 px-4 py-4 backdrop-blur sm:px-6 lg:px-8"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="lg:hidden"><Button onClick={() => onNavigate('home')} variant="ghost" size="icon" className="h-10 w-10 rounded-xl"><PanelLeft className="h-4 w-4" /></Button></div><div className="min-w-0"><div className="truncate text-sm font-semibold">{pageTitle}</div><div className="hidden truncate text-xs text-muted-foreground sm:block">Practice-first learning for embedded systems</div></div></div><div className="flex flex-wrap items-center justify-end gap-2"><div className="hidden items-center gap-2 rounded-full border border-border/70 bg-card px-3 py-2 text-xs sm:flex"><Flame className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" /><span className="font-semibold">6 day streak</span></div><div className="hidden items-center gap-2 rounded-full border border-border/70 bg-card px-3 py-2 text-xs md:flex"><Activity className="h-3.5 w-3.5 text-primary" /><span>12 exercises</span></div><div className="flex items-center gap-2 rounded-full border border-border/70 bg-card px-2 py-1.5"><Switch id="sample-data" checked={sampleData} onCheckedChange={onToggleSampleData} /><label htmlFor="sample-data" className="pr-1 text-xs font-medium">Sample Data</label></div><Button onClick={onToggleTheme} variant="outline" size="icon" className="h-10 w-10 rounded-xl" aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}>{theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button><div className="flex items-center gap-2 rounded-full border border-border/70 bg-card py-1 pl-2 pr-1"><span className={`h-2 w-2 rounded-full ${activeAgentId ? 'animate-pulse bg-amber-500' : 'bg-emerald-500'}`} /><span className="hidden text-[11px] text-muted-foreground xl:inline" title="Runs the adaptive tutor directly through Claude CLI on the Linux host OAuth session.">{activeAgentId ? 'Claude CLI working' : 'Claude CLI · OAuth'}</span><UserMenu /></div></div></div></header>
+function HeaderBar({ view, displayName, theme, onToggleTheme, sampleData, onToggleSampleData, activeAgentId, streak, exercises, onNavigate }: { view: ViewName; displayName: string; theme: 'light' | 'dark'; onToggleTheme: () => void; sampleData: boolean; onToggleSampleData: (checked: boolean) => void; activeAgentId: string | null; streak: number; exercises: number; onNavigate: (view: ViewName) => void }) {
+  const pageTitle = view === 'home' ? 'Learning desk' : view === 'practice' ? 'Practice workspace' : view === 'assessment' ? 'Assessment workspace' : view === 'review' ? 'Attempt review' : view === 'lesson' ? 'Lesson' : view === 'skill-map' ? 'Your skill map' : view === 'history' ? 'Practice history' : 'Profile & preferences'
+  return <header className="border-b border-border/70 bg-background/90 px-4 py-4 backdrop-blur sm:px-6 lg:px-8"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="lg:hidden"><Button onClick={() => onNavigate('home')} variant="ghost" size="icon" className="h-10 w-10 rounded-xl"><PanelLeft className="h-4 w-4" /></Button></div><div className="min-w-0"><div className="truncate text-sm font-semibold">{pageTitle}</div><div className="hidden truncate text-xs text-muted-foreground sm:block">Practice-first learning for embedded systems</div></div></div><div className="flex flex-wrap items-center justify-end gap-2">{streak > 0 && <div className="hidden items-center gap-2 rounded-full border border-border/70 bg-card px-3 py-2 text-xs sm:flex"><Flame className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" /><span className="font-semibold">{streak} day streak</span></div>}{exercises > 0 && <div className="hidden items-center gap-2 rounded-full border border-border/70 bg-card px-3 py-2 text-xs md:flex"><Activity className="h-3.5 w-3.5 text-primary" /><span>{exercises} {exercises === 1 ? 'exercise' : 'exercises'}</span></div>}<div className="flex items-center gap-2 rounded-full border border-border/70 bg-card px-2 py-1.5"><Switch id="sample-data" checked={sampleData} onCheckedChange={onToggleSampleData} /><label htmlFor="sample-data" className="pr-1 text-xs font-medium">Sample Data</label></div><Button onClick={onToggleTheme} variant="outline" size="icon" className="h-10 w-10 rounded-xl" aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}>{theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button><div className="flex items-center gap-2 rounded-full border border-border/70 bg-card py-1 pl-2 pr-1"><span className={`h-2 w-2 rounded-full ${activeAgentId ? 'animate-pulse bg-amber-500' : 'bg-emerald-500'}`} /><span className="hidden text-[11px] text-muted-foreground xl:inline" title="Runs the adaptive tutor directly through Claude CLI on the Linux host OAuth session.">{activeAgentId ? 'Claude CLI working' : 'Claude CLI · OAuth'}</span><UserMenu /></div></div></div></header>
 }
 
 function HistoryPanel({ attempts, sampleData, onBack, onPractice }: { attempts: HomeAttempt[]; sampleData: boolean; onBack: () => void; onPractice: () => void }) {
@@ -295,7 +333,7 @@ function EmbedPathApp() {
   const [sampleData, setSampleData] = useState(true)
   const [dateLabel, setDateLabel] = useState('Your learning desk')
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null)
-  const [saved, setSaved] = useState<SavedState>({ profile: null, mastery: [], activities: [], attempts: [], recommendations: [], assessmentSessions: [], assessmentItems: [] })
+  const [saved, setSaved] = useState<SavedState>({ profile: null, mastery: [], activities: [], attempts: [], recommendations: [], assessmentSessions: [], assessmentItems: [], responses: [] })
   const [dataLoading, setDataLoading] = useState(true)
   const [dataError, setDataError] = useState<string | null>(null)
   const [selectedActivity, setSelectedActivity] = useState<PracticeActivity>(SAMPLE_ACTIVITY)
@@ -314,6 +352,10 @@ function EmbedPathApp() {
   const [claudeState, setClaudeState] = useState<ClaudeState>(SAMPLE_CLAUDE)
   const [generated, setGenerated] = useState<{ sessionId: string; total: number; items: JsonRecord[]; coverage: { domain_id: string; topic_id: string; weight: number }[]; pending: number; missing: { slot: number; reason: string }[] } | null>(null)
   const [generating, setGenerating] = useState(false)
+  const [lesson, setLesson] = useState<LessonState | null>(null)
+  const [lessonData, setLessonData] = useState<ReviewData | null>(null)
+  const [markingLearned, setMarkingLearned] = useState(false)
+  const [retrievalFeedback, setRetrievalFeedback] = useState<string | null>(null)
   const [waitingNext, setWaitingNext] = useState(false)
   // Generated items are kept sorted by slot; the displayed question is tracked by slot so a late or retried question inserted before it never shifts the view.
   const assessmentIndex = generated ? Math.max(0, generated.items.findIndex((item) => itemSlot(item) === currentSlot)) : rawIndex
@@ -323,6 +365,7 @@ function EmbedPathApp() {
     if (storedTheme === 'dark' || storedTheme === 'light') setTheme(storedTheme)
     setDateLabel(new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()))
   }, [])
+  useEffect(() => { window.scrollTo({ top: 0 }) }, [view])
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     window.localStorage.setItem('theme', theme)
@@ -346,7 +389,7 @@ function EmbedPathApp() {
       // Abandoned sessions (and their unanswered items) stay in the database but never reach the UI; graded responses still count.
       const assessmentSessions = Array.isArray(payloads[5]) ? payloads[5].filter((session): session is JsonRecord => isRecord(session) && session.status !== 'abandoned') : []
       const abandonedIds = new Set(Array.isArray(payloads[5]) ? payloads[5].filter(isRecord).filter((session) => session.status === 'abandoned').map((session) => stringValue(session.id)) : [])
-      const next: SavedState = { profile: Array.isArray(payloads[0]) && isRecord(payloads[0][0]) ? payloads[0][0] : null, mastery: Array.isArray(payloads[1]) ? payloads[1].filter(isRecord) : [], activities: Array.isArray(payloads[2]) ? payloads[2].filter(isRecord) : [], attempts: Array.isArray(payloads[3]) ? payloads[3].filter(isRecord) : [], recommendations: Array.isArray(payloads[4]) ? payloads[4].filter(isRecord) : [], assessmentSessions, assessmentItems: Array.isArray(payloads[6]) ? payloads[6].filter((item): item is JsonRecord => isRecord(item) && !abandonedIds.has(stringValue(item.session_id))) : [] }
+      const next: SavedState = { profile: Array.isArray(payloads[0]) && isRecord(payloads[0][0]) ? payloads[0][0] : null, mastery: Array.isArray(payloads[1]) ? payloads[1].filter(isRecord) : [], activities: Array.isArray(payloads[2]) ? payloads[2].filter(isRecord) : [], attempts: Array.isArray(payloads[3]) ? payloads[3].filter(isRecord) : [], recommendations: Array.isArray(payloads[4]) ? payloads[4].filter(isRecord) : [], assessmentSessions, assessmentItems: Array.isArray(payloads[6]) ? payloads[6].filter((item): item is JsonRecord => isRecord(item) && !abandonedIds.has(stringValue(item.session_id))) : [], responses: Array.isArray(payloads[7]) ? payloads[7].filter(isRecord) : [] }
       setSaved(next)
       const hasProgress = next.attempts.length > 0 || next.mastery.some((item) => numberValue(item.score) > 0) || (Array.isArray(payloads[7]) && payloads[7].length > 0)
       setSampleData(!hasProgress)
@@ -366,7 +409,9 @@ function EmbedPathApp() {
       const body: unknown = await response.json()
       if (!response.ok || !isRecord(body) || body.success !== true || !Array.isArray(body.data)) throw new Error('Updated mastery could not be loaded.')
       const mastery = body.data.filter(isRecord)
-      setSaved((current) => ({ ...current, mastery }))
+      // Header stats count graded responses, so refresh them too (best effort).
+      const responses = await authFetch('/api/assessment_responses').then((res) => res.json()).then((payload: unknown) => isRecord(payload) && Array.isArray(payload.data) ? payload.data.filter(isRecord) : null).catch(() => null)
+      setSaved((current) => ({ ...current, mastery, ...(responses && { responses }) }))
       setSampleData(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Updated mastery could not be loaded.')
@@ -375,6 +420,7 @@ function EmbedPathApp() {
 
   const realActivity = useMemo(() => normalizeActivity(saved.activities[0]), [saved.activities])
   const activeActivity = sampleData ? SAMPLE_ACTIVITY : realActivity ?? EMPTY_ACTIVITY
+  const headerStats = useMemo(() => activityStats(saved), [saved])
   const displayName = displayNameFromUser(user)
   const displayEmail = displayEmailFromUser(user)
   const homeAttempts = useMemo<HomeAttempt[]>(() => {
@@ -383,10 +429,12 @@ function EmbedPathApp() {
   }, [sampleData, saved.attempts])
   const homeRecommendation = useMemo<HomeRecommendation>(() => {
     if (sampleData) return SAMPLE_RECOMMENDATION
+    const picked = pickRecommendation(saved.mastery)
+    if (picked) return picked
     const record = saved.recommendations[0]
     const metadata = recordValue(record?.activity_metadata)
     return record ? { title: stringValue(metadata.title, 'Continue your diagnostic'), description: stringValue(metadata.description, 'Use the coach to generate the next evidence-building activity.'), domain: stringValue(metadata.domain, 'Embedded systems'), topic: stringValue(metadata.topic, 'Mixed diagnostic'), level: stringValue(metadata.level_band, 'Basic'), format: stringValue(metadata.format, 'Diagnostic'), duration: numberValue(metadata.estimated_duration_minutes, 15), rationale: stringValue(record.rationale, 'The next task is selected from your current evidence.'), isReal: true } : { title: 'Start your mixed diagnostic', description: 'Answer a few varied questions so the coach can build an independent baseline for each domain.', domain: 'All domains', topic: 'Initial placement', level: 'Basic → Expert', format: 'Assessment', duration: 12, rationale: 'No saved recommendation exists yet. A diagnostic creates the evidence needed for an adaptive path.', isReal: false }
-  }, [sampleData, saved.recommendations])
+  }, [sampleData, saved.recommendations, saved.mastery])
   const assessmentQuestions = useMemo(() => { if (generated) { const fresh = generated.items.map(normalizeQuestion).filter((item): item is AssessmentQuestion => item !== null); if (fresh.length > 0) return fresh } if (sampleData) return SAMPLE_QUESTIONS; const normalized = saved.assessmentItems.map(normalizeQuestion).filter((item): item is AssessmentQuestion => item !== null); return normalized.length > 0 ? normalized : SAMPLE_QUESTIONS.slice(0, 1) }, [generated, sampleData, saved.assessmentItems])
   const assessmentQuestion = assessmentQuestions[Math.min(assessmentIndex, assessmentQuestions.length - 1)] ?? SAMPLE_QUESTIONS[0]
   const assessmentSession = saved.assessmentSessions[0]
@@ -401,6 +449,7 @@ function EmbedPathApp() {
         const item = rows.get(`${domain.id}/${topic.id}`)
         if (!item) return { id: topic.id, label: topic.label, score: 0, level: 'Not started', confidence: 0, state: 'ready', detail: 'No evidence yet. Take a topic assessment to start this rating.', evidence: [], prerequisite: null, isReal: true }
         const evidenceSummary = recordValue(item.evidence_summary)
+        if (isLearnedRow(item)) return { id: topic.id, label: topic.label, score: 0, level: 'Learned', confidence: 0, state: 'ready', detail: stringValue(evidenceSummary.recommended_focus, 'Learned, not assessed yet.'), evidence: [], prerequisite: null, isReal: true }
         const evidence = arrayValue(evidenceSummary.evidence).filter((line): line is string => typeof line === 'string')
         return { id: topic.id, label: topic.label, score: numberValue(item.score), level: stringValue(item.level_band, 'Basic'), confidence: numberValue(item.confidence), state: 'active', detail: stringValue(evidenceSummary.recommended_focus, 'No topic explanation has been recorded yet.'), evidence, prerequisite: null, isReal: true }
       })
@@ -543,28 +592,77 @@ function EmbedPathApp() {
     }
   }
   // The lecture comes back first (cached per topic, so repeat visits are instant); the practice exercise is fetched in the background.
+  // Lesson requests bypass requestCoach so a failure shows in the lesson view, not in the Home "Saved data" banner.
   const lessonRef = useRef<string | null>(null)
-  const loadLessonPractice = async (domainId: string, topicId: string, lessonId: string) => {
-    const practice = await requestCoach('', undefined, { url: '/api/lesson', body: { domain_id: domainId, topic_id: topicId, part: 'practice' } })
-    if (!practice || lessonRef.current !== lessonId) return
-    setSelectedActivity(practice.activity)
-    setHints(practice.hints)
+  const fetchLesson = async (body: JsonRecord) => {
+    setActiveAgentId(CLAUDE_RUNTIME)
+    try {
+      const response = await authFetch('/api/lesson', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const result = recordValue(await response.json().catch(() => null))
+      const responseRecord = recordValue(result.response)
+      if (!response.ok || result.success !== true) throw new Error(stringValue(result.error, 'Claude CLI could not complete this request.'))
+      const normalized = normalizeCoachResult(responseRecord.result, responseRecord.metadata)
+      if (!normalized) throw new Error('Claude CLI response did not match the saved learning schema.')
+      return normalized
+    } finally { setActiveAgentId(null) }
   }
-  const startTopicLesson = async (domainId: string, topicId: string) => {
-    setLoading(true)
-    setAssessmentScope(null)
+  const loadLessonPractice = async (domainId: string, topicId: string) => {
     const lessonId = `lesson-${domainId}-${topicId}`
-    lessonRef.current = lessonId
-    const result = await requestCoach('', undefined, { url: '/api/lesson', body: { domain_id: domainId, topic_id: topicId, part: 'lecture' } })
-    if (result) {
-      setReview(result)
-      setSelectedActivity(result.activity)
-      setHints(result.hints)
-      setClaudeState(fallbackClaudeFromReview(result))
-      setView('review')
-      void loadLessonPractice(domainId, topicId, lessonId)
+    setLesson((current) => current && current.domainId === domainId && current.topicId === topicId ? { ...current, practice: 'loading' } : current)
+    try {
+      const practice = await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'practice' })
+      if (lessonRef.current !== lessonId) return
+      setSelectedActivity(practice.activity)
+      setHints(practice.hints)
+      setLesson((current) => current && current.domainId === domainId && current.topicId === topicId ? { ...current, practice: 'ready' } : current)
+    } catch {
+      setLesson((current) => current && current.domainId === domainId && current.topicId === topicId ? { ...current, practice: 'error' } : current)
     }
-    setLoading(false)
+  }
+  // action: one of the lecture variants; regenerate: drop the cached lesson and write a new one. Neither one leaves the lesson view or loses the lesson id.
+  const loadLesson = async (domainId: string, topicId: string, options: { action?: string; regenerate?: boolean } = {}) => {
+    const lessonId = `lesson-${domainId}-${topicId}`
+    const initial = !options.action && !options.regenerate && !(lessonRef.current === lessonId && lessonData)
+    lessonRef.current = lessonId
+    setLesson((current) => ({ domainId, topicId, status: initial ? 'loading' : 'ready', error: null, variant: initial ? null : current?.variant ?? null, practice: current?.practice ?? 'loading', busy: !initial }))
+    if (initial) { setLessonData(null); setRetrievalFeedback(null) }
+    try {
+      const result = await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'lecture', ...(options.action && { action: options.action }), ...(options.regenerate && { regenerate: true }) })
+      if (lessonRef.current !== lessonId) return
+      setLessonData(result)
+      setClaudeState(fallbackClaudeFromReview(result))
+      setLesson((current) => ({ domainId, topicId, status: 'ready', error: null, variant: options.action ? LESSON_VARIANTS[options.action] ?? null : null, practice: current?.practice ?? 'loading', busy: false }))
+      if (!options.action) void loadLessonPractice(domainId, topicId)
+    } catch (error) {
+      if (lessonRef.current !== lessonId) return
+      const message = error instanceof Error ? error.message : 'Claude CLI could not be reached.'
+      if (initial) setLesson({ domainId, topicId, status: 'error', error: message, variant: null, practice: 'loading', busy: false })
+      else { setLesson((current) => current && { ...current, busy: false }); toast.error(message) }
+    }
+  }
+  const startTopicLesson = (domainId: string, topicId: string) => {
+    setAssessmentScope(null)
+    setView('lesson')
+    void loadLesson(domainId, topicId)
+  }
+  const markLearned = async () => {
+    if (!lesson || markingLearned) return
+    setMarkingLearned(true)
+    try {
+      const response = await authFetch('/api/lesson/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain_id: lesson.domainId, topic_id: lesson.topicId }) })
+      const body: unknown = await response.json().catch(() => null)
+      if (!response.ok || !isRecord(body) || body.success !== true) throw new Error(isRecord(body) ? stringValue(body.error, 'Could not mark this lesson as learned.') : 'Could not mark this lesson as learned.')
+      await refreshMastery()
+      toast.success('Marked as learned. Take the topic assessment to get a rating.')
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Could not mark this lesson as learned.') } finally { setMarkingLearned(false) }
+  }
+  // Retrieval check stays on the generic /api/claude route (moving it into /api/lesson would need a new grading prompt and storage); feedback is shown inline so the lesson stays on screen.
+  const lessonRetrievalSubmit = async (answer: string) => {
+    if (!lessonData || !lesson || !answer.trim()) return
+    setLesson({ ...lesson, busy: true })
+    const result = await requestCoach(`request_type: review_request\nlesson: ${lessonData.activity.domain} / ${lessonData.activity.topic} (${lesson.domainId}/${lesson.topicId})\nretrieval check: ${lessonData.lecture.retrieval_check.prompt ?? ''}\nretrieval check answer: ${answer}\nanswer rule: ${lessonData.lecture.retrieval_check.answer_rule || 'Explain the reasoning.'}\nEvaluate the retrieval check and return the complete saved response schema; put the feedback for the learner in learner_explanation.`)
+    if (result) setRetrievalFeedback(result.learner_explanation || result.feedback.summary || 'Retrieval check reviewed.')
+    setLesson((current) => current && { ...current, busy: false })
   }
   const persistAttempt = async (result: ReviewData) => {
     try {
@@ -610,11 +708,21 @@ function EmbedPathApp() {
     if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => { if (generated) { const item = generated.items[Math.min(assessmentIndex + 1, generated.items.length - 1)]; if (item) setCurrentSlot(itemSlot(item)) } else setRawIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)) }} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'review' && review) return <ResultSection data={review} onStartNext={() => openPractice(selectedActivity.id?.startsWith('lesson-') && selectedActivity.prompt ? selectedActivity : undefined)} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} loading={loading} statusMessage={statusMessage} />
+    if (view === 'lesson' && lesson) {
+      const domain = findDomain(lesson.domainId); const topic = findTopic(lesson.domainId, lesson.topicId)
+      const hasRow = (topicId: string) => saved.mastery.some((item) => stringValue(item.domain_id) === lesson.domainId && stringValue(item.topic_id) === topicId)
+      const own = saved.mastery.find((item) => stringValue(item.domain_id) === lesson.domainId && stringValue(item.topic_id) === lesson.topicId)
+      const refs = (ids: string[]) => ids.flatMap((id) => { const entry = findTopic(lesson.domainId, id); return entry ? [{ id, label: entry.label }] : [] })
+      const next = domain?.topics.find((entry) => entry.order === (topic?.order ?? 0) + 1)
+      return <LessonSection key={`${lesson.domainId}/${lesson.topicId}`} data={lessonData} status={lesson.status} error={lesson.error} domainLabel={domain?.label ?? lesson.domainId} topicLabel={topic?.label ?? lesson.topicId} subtopics={topic?.subtopics ?? []} prerequisites={refs(topic?.prerequisites ?? [])} missingPrerequisites={refs((topic?.prerequisites ?? []).filter((id) => !hasRow(id)))} nextTopic={next ? { id: next.id, label: next.label } : null} learnState={own ? (isLearnedRow(own) ? 'learned' : 'assessed') : 'none'} variantLabel={lesson.variant} practiceStatus={lesson.practice} busy={lesson.busy} marking={markingLearned} retrievalFeedback={retrievalFeedback}
+        onBack={() => setView('home')} onRetry={() => void loadLesson(lesson.domainId, lesson.topicId)} onAction={(action) => void loadLesson(lesson.domainId, lesson.topicId, { action })} onShowOriginal={() => void loadLesson(lesson.domainId, lesson.topicId, {})} onRegenerate={() => { void loadLesson(lesson.domainId, lesson.topicId, { regenerate: true }) }} onMarkLearned={markLearned} onNextTopic={() => next && startTopicLesson(lesson.domainId, next.id)} onOpenTopic={(topicId) => startTopicLesson(lesson.domainId, topicId)}
+        onStartPractice={() => openPractice(selectedActivity.id?.startsWith('lesson-') && selectedActivity.prompt ? selectedActivity : undefined)} onRetryPractice={() => void loadLessonPractice(lesson.domainId, lesson.topicId)} onRetrievalSubmit={(answer) => void lessonRetrievalSubmit(answer)} />
+    }
     if (view === 'skill-map') return <SkillMapSection domains={skillDomains} sampleData={sampleData} loading={loading} onRetake={openAssessment} onPractice={handlePracticeFromSkillMap} onBack={() => setView('home')} />
     if (view === 'history') return <HistoryPanel attempts={homeAttempts} sampleData={sampleData} onBack={() => setView('home')} onPractice={() => openPractice()} />
     return <ProfilePanel displayName={displayName} email={displayEmail} profile={saved.profile} sampleData={sampleData} onBack={() => setView('home')} onToggleSampleData={handleSampleData} />
   }
-  return <div className="min-h-screen bg-background text-foreground antialiased"><div className="flex min-h-screen"><SideNavigation view={view} onNavigate={(next) => next === 'practice' ? openPractice() : setView(next)} displayName={displayName} /><div className="min-w-0 flex-1"><HeaderBar view={view} displayName={displayName} theme={theme} onToggleTheme={handleTheme} sampleData={sampleData} onToggleSampleData={handleSampleData} activeAgentId={activeAgentId} onNavigate={(next) => next === 'practice' ? openPractice() : setView(next)} /><MobileNavigation view={view} onNavigate={(next) => next === 'practice' ? openPractice() : setView(next)} /><main className="min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{dataLoading ? <div className="mx-auto flex min-h-[22rem] max-w-4xl flex-col items-center justify-center gap-3 text-center"><Loader2 className="h-7 w-7 animate-spin text-primary" /><p className="text-sm text-muted-foreground">Loading your learning desk…</p></div> : renderView()}</main></div></div></div>
+  return <div className="min-h-screen bg-background text-foreground antialiased"><div className="flex min-h-screen"><SideNavigation view={view} onNavigate={(next) => next === 'practice' ? openPractice() : setView(next)} displayName={displayName} /><div className="min-w-0 flex-1"><HeaderBar view={view} displayName={displayName} theme={theme} onToggleTheme={handleTheme} sampleData={sampleData} onToggleSampleData={handleSampleData} activeAgentId={activeAgentId} streak={sampleData ? 0 : headerStats.streak} exercises={sampleData ? 0 : headerStats.exercises} onNavigate={(next) => next === 'practice' ? openPractice() : setView(next)} /><MobileNavigation view={view} onNavigate={(next) => next === 'practice' ? openPractice() : setView(next)} /><main className="min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{dataLoading ? <div className="mx-auto flex min-h-[22rem] max-w-4xl flex-col items-center justify-center gap-3 text-center"><Loader2 className="h-7 w-7 animate-spin text-primary" /><p className="text-sm text-muted-foreground">Loading your learning desk…</p></div> : renderView()}</main></div></div></div>
 }
 
 export default function Page() {

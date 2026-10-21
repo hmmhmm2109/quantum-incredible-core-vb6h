@@ -9,6 +9,7 @@
     "prestart": "if [ -n \"$DATABASE_URL\" ]; then lyzr-pg-migrate; fi",
     "start": "next start -p 3333",
     "lint": "next lint",
+    "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "lyzr-pg-migrate"
   },
