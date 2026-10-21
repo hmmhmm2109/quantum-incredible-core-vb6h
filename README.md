@@ -11,12 +11,12 @@ Claude login. The app never asks for or stores an Anthropic API key.
 
 | Feature | How it works |
 |---|---|
-| **Mixed diagnostic** | Claude writes 5 fresh multiple-choice questions (one per domain) with random sub-topics, difficulty and angle. Question 1 appears first; the rest are written in the background. |
-| **Topic assessment** | Pick one topic on Home and Claude writes 3 questions on it, rising in difficulty. |
-| **Instant grading** | Each question's answer key is stored server-side when it is written. Submitting is graded against that key in milliseconds, with no Claude call. |
+| **Mixed diagnostic** | Claude writes 5 fresh multiple-choice questions (one per domain) on a random taxonomy topic and sub-topic, with random difficulty and angle. Question 1 appears first; the rest are written in the background. |
+| **Topic assessment** | Pick one topic on Home and Claude writes 3 questions on it, rising in difficulty. Questions store the taxonomy `topic_id`; an unknown topic is rejected with HTTP 400. |
+| **Instant grading** | Each question's answer key is stored server-side when it is written. Submitting is graded against that key in milliseconds, with no Claude call. The same request saves the response, updates topic mastery and logs a learning event. |
 | **Topic lessons** | Theory, a guided worked example and pitfalls. Cached per topic in the database, so a lesson is written once for everyone. A practice exercise with staged hints is prepared in the background. |
 | **Practice workspace** | Editor, notes and staged hints for the exercise. Running code in a sandbox is not connected yet. |
-| **Progress** | Attempts, assessment responses and mastery are saved per account in PostgreSQL. |
+| **Progress** | Attempts, assessment responses and mastery are saved per account in PostgreSQL. Assessment responses and mastery are written by `/api/assessment/grade`, not by the client. |
 
 The answer key never reaches the browser before you submit: `/api/assessment_items` strips it,
 and clients cannot overwrite it.
@@ -70,11 +70,20 @@ the app sees it. Errors are reduced to a safe message; stderr stays in the serve
 | Route | Purpose |
 |---|---|
 | `POST /api/assessment/generate` | No body: starts a diagnostic (plans 5 slots, returns question 1). `{ session_id, slot }`: writes another slot. `{ domain_id, topic_id, topic_label }`: starts a 3-question topic assessment. |
-| `POST /api/assessment/grade` | Grades one item against its stored answer key and returns a full review. |
+| `POST /api/assessment/grade` | `{ item_id, selected_answers, ... }`. Grades one item against its stored answer key and returns a full review. In one transaction it also saves the `assessment_responses` row, updates `topic_mastery` (score moves toward the evidence, at most ±8 per submit; level band moves at most one step; confidence is capped) and adds a `learning_events` row. Idempotent per item (advisory lock): a repeat submit returns the saved result with `replayed: true` and applies mastery only once. |
+| `POST /api/assessment/cleanup` | Marks the account's `in_progress` sessions older than 24 hours as `abandoned`. Nothing is deleted. The app calls it on load. |
 | `POST /api/lesson` | `{ domain_id, topic_id, part: "lecture" \| "practice" }`. Cached in `topic_lessons`. |
 | `POST /api/claude` | General coach call (lecture actions, retrieval checks, free-form coach requests). |
 | `/api/<table>` | CRUD for `learner_profiles`, `topic_mastery`, `activities`, `attempts`, `recommendations`, `assessment_sessions`, `assessment_items`, `assessment_responses`, `learning_events`, `study_sessions`. Owner-scoped via `scopedRepo`. |
 | `/api/auth/*` | Register, login, logout, current user. |
+
+**Concurrency and retries.** `lib/single-flight.ts` makes concurrent identical lesson and question
+generations share one Claude call (in-process, so it assumes a single app instance). Inserting a
+question slot also takes a Postgres advisory lock, so a racing request reuses the item that won instead of adding a second one.
+Asking for a slot that already has an item returns HTTP 409.
+In the browser, background question generation uses `lib/retry.ts`: up to 3 attempts with backoff
+(1s, 3s; longer, 5s and 10s, when the server is busy with 429); a 409 means the slot already exists and its item is used.
+Slots that still fail show a banner with a Retry button, and questions are always shown in slot order.
 
 Schemas for the coach result live in `lib/coach-schema.ts`. They mirror what
 `normalizeCoachResult()` in `app/page.tsx` requires, so Claude can only return a shape the UI can render.
@@ -87,10 +96,25 @@ app/sections/           page-level sections
 app/api/                route handlers
 lib/claude-cli.ts       Claude CLI runner
 lib/coach-schema.ts     JSON schemas for coach output
-lib/assessment-topics.ts  sub-topic pool the server draws from when planning a diagnostic
-lib/learning-topics.ts  topic picker options (shared by UI and /api/lesson)
+lib/taxonomy.ts         single source of truth: 5 domains, 51 topics in learning order (with prerequisites), 4 sub-topics each
+lib/assessment-topics.ts  view over the taxonomy: sub-topic pool and helpers for planning a diagnostic
+lib/learning-topics.ts  view over the taxonomy: topic picker options (shared by UI and /api/lesson)
+lib/single-flight.ts    de-duplicates concurrent identical server calls
+lib/retry.ts            client retry policy for background question generation
+scripts/                cleanup-topic-mastery.sql (generated) and its generator
 lib/db/schema.ts        Drizzle schema
 drizzle/                generated migrations
+```
+
+## Taxonomy maintenance
+
+Lessons, assessments and `topic_mastery` all key off the ids in `lib/taxonomy.ts`, so renaming an id
+orphans its data. To remove `topic_mastery` rows whose topic is not in the taxonomy, run
+`scripts/cleanup-topic-mastery.sql` by hand (it is never run automatically): run its preview `SELECT`
+first, then the `DELETE`, e.g. `psql "$DATABASE_URL" -f scripts/cleanup-topic-mastery.sql`.
+The file is generated; after editing the taxonomy, regenerate it with:
+```bash
+npx tsx scripts/gen-cleanup-topic-mastery.ts
 ```
 
 ## Known limitations
