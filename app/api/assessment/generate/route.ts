@@ -190,7 +190,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       const slots = buildSlots(scope ?? undefined)
       const [session] = await sessionRepo.insert({
         mode: 'knowledge_check',
-        topic_coverage: slots.map((slot) => ({ domain_id: slot.domain_id, topic_id: slot.topic_id ?? toTopicId(slot.topic), weight: 1 })),
+        topic_coverage: slots.map((slot) => ({ domain_id: slot.domain_id, topic_id: slot.topic_id ?? toTopicId(slot.topic), subtopic: slot.topic, weight: 1 })),
         timing_policy: { timed: false, question_count: slots.length, reveal_correctness_during_test: false, plan: slots },
         score: '0',
         confidence: '0',
