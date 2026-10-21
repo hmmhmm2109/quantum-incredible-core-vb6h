@@ -111,6 +111,8 @@ lib/db/schema.ts        Drizzle schema
 drizzle/                generated migrations
 ```
 
+Open work and how to continue on another machine: see [HANDOFF.md](HANDOFF.md).
+
 ## Taxonomy maintenance
 
 Lessons, assessments and `topic_mastery` all key off the ids in `lib/taxonomy.ts`, so renaming an id
