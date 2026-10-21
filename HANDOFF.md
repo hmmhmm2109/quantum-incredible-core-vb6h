@@ -31,7 +31,7 @@ Claude CLI on the host writes the lessons and questions. Built so far:
 2. **Spawn observability.** `lib/claude-cli.ts` (`spawnClaude`) does not record which route/purpose started a spawn, so stray calls could not be attributed. Log route, purpose, duration and exit code per spawn.
 3. **Legacy retrieval path leaks `answer_rule`.** `handleRetrievalSubmit` / `handleLectureAction` in `app/page.tsx` (plus `hooks/use-lesson.ts`, `app/sections/result-section.tsx`) send `review.lecture.retrieval_check.answer_rule` through `/api/claude`. Low risk for single-user. Move grading server-side like `/api/lesson/transfer` with `kind: 'retrieval'`, then drop the legacy handlers if unused.
 4. **Question generation (`app/api/assessment/generate/route.ts`, `lib/assessment-validate.ts`).**
-   - `judgeCoherence` accepts a question when the judge call itself fails (fail-open). Decide fail-open vs fail-closed.
+   - `judgeCoherence` stays fail-open on purpose (a failed judge call must not discard a question that passed the heuristics); it now logs a warning and stores `validation_evidence.judge` (`not_needed` | `passed` | `skipped`) on the item.
    - The A/B coherence heuristic only fires when the stem names the designs in backticks.
    - The original switch-vs-table bad item (id starting `26a67`) was never reproduced with the new prompt.
    - The difficulty-rationale prompt change (at most 2 generic bullets) is untested with real Claude.
