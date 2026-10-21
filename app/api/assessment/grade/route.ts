@@ -166,6 +166,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     })
   } catch (error) {
     console.error('[API] POST /api/assessment/grade error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to grade this answer' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to grade this answer' }, { status: 500 })
   }
 })

@@ -10,7 +10,8 @@ export const GET = authMiddleware(async (req: NextRequest) => {
     const data = id ? await repo.findOne(eq(learner_profiles.id, id)) : await repo.findMany({ orderBy: desc(learner_profiles.created_at) })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to load learner profiles'
+    console.error('[API] /api/learner_profiles:', error)
+    const message = 'Unable to load learner profiles'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -23,7 +24,8 @@ export const POST = authMiddleware(async (req: NextRequest) => {
     })
     return NextResponse.json({ success: true, data }, { status: 201 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to create learner profile'
+    console.error('[API] /api/learner_profiles:', error)
+    const message = 'Unable to create learner profile'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -37,7 +39,8 @@ export const PATCH = authMiddleware(async (req: NextRequest) => {
     if (!data) return NextResponse.json({ success: false, error: 'Learner profile not found' }, { status: 404 })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to update learner profile'
+    console.error('[API] /api/learner_profiles:', error)
+    const message = 'Unable to update learner profile'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -49,7 +52,8 @@ export const DELETE = authMiddleware(async (req: NextRequest) => {
     await scopedRepo(learner_profiles).delete(eq(learner_profiles.id, id))
     return NextResponse.json({ success: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to delete learner profile'
+    console.error('[API] /api/learner_profiles:', error)
+    const message = 'Unable to delete learner profile'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })

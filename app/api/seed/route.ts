@@ -114,7 +114,8 @@ export const POST = authMiddleware(async (_req: NextRequest) => {
 
     return Response.json({ success: true, seeded: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to seed learner data'
+    console.error('[API] /api/seed:', error)
+    const message = 'Unable to seed learner data'
     return Response.json({ success: false, error: message }, { status: 400 })
   }
 })

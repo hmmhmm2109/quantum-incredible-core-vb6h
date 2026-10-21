@@ -10,7 +10,8 @@ export const GET = authMiddleware(async (req: NextRequest) => {
     const data = id ? await repo.findOne(eq(attempts.id, id)) : await repo.findMany({ orderBy: desc(attempts.created_at) })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to load attempts'
+    console.error('[API] /api/attempts:', error)
+    const message = 'Unable to load attempts'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -24,7 +25,8 @@ export const POST = authMiddleware(async (req: NextRequest) => {
     })
     return NextResponse.json({ success: true, data }, { status: 201 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to create attempt'
+    console.error('[API] /api/attempts:', error)
+    const message = 'Unable to create attempt'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -38,7 +40,8 @@ export const PATCH = authMiddleware(async (req: NextRequest) => {
     if (!data) return NextResponse.json({ success: false, error: 'Attempt not found' }, { status: 404 })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to update attempt'
+    console.error('[API] /api/attempts:', error)
+    const message = 'Unable to update attempt'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -50,7 +53,8 @@ export const DELETE = authMiddleware(async (req: NextRequest) => {
     await scopedRepo(attempts).delete(eq(attempts.id, id))
     return NextResponse.json({ success: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to delete attempt'
+    console.error('[API] /api/attempts:', error)
+    const message = 'Unable to delete attempt'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })

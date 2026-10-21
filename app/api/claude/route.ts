@@ -1,8 +1,7 @@
-import { authMiddleware, getCurrentUserId } from 'lyzr-architect-pg'
+import { authMiddleware } from 'lyzr-architect-pg'
 import { NextRequest, NextResponse } from 'next/server'
 import { ClaudeCliError, runClaudeJson } from '@/lib/claude-cli'
 import { COACH_RESULT_SCHEMA } from '@/lib/coach-schema'
-import { rateLimit } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -18,9 +17,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const message = typeof body.message === 'string' ? body.message.trim() : ''
     if (!message) return NextResponse.json({ success: false, error: 'message is required' }, { status: 400 })
     if (message.length > 100_000) return NextResponse.json({ success: false, error: 'message is too large' }, { status: 413 })
-
-    const limited = rateLimit(`claude:${getCurrentUserId() ?? 'anonymous'}`, 20, 60_000)
-    if (!limited.ok) return NextResponse.json({ success: false, error: 'Too many requests. Try again shortly.' }, { status: 429, headers: { 'Retry-After': String(limited.retryAfterSeconds) } })
 
     const result = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message, jsonSchema: COACH_RESULT_SCHEMA, purpose: 'api/claude' })
 

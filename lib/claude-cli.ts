@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process'
+import { getCurrentUserId } from 'lyzr-architect-pg'
+import { rateLimit } from '@/lib/rate-limit'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 2_000_000
 const MAX_CONCURRENT = 4
+const MAX_SPAWNS_PER_MINUTE = 30
 export const MODEL = 'claude-sonnet-5-5'
 
 let active = 0
@@ -94,6 +97,9 @@ function parseJsonText(value: string): unknown {
  * stderr stays in the server log.
  */
 export async function runClaudeJson(options: RunOptions): Promise<unknown> {
+  // One budget per learner, counted where Claude is actually spawned, so cached lessons and replayed grades cost nothing.
+  const budget = rateLimit(`claude:${getCurrentUserId() ?? 'anonymous'}`, MAX_SPAWNS_PER_MINUTE, 60_000)
+  if (!budget.ok) throw new ClaudeCliError(`Too many requests. Try again in ${budget.retryAfterSeconds}s.`, 429)
   if (active >= MAX_CONCURRENT) throw new ClaudeCliError('The tutor is busy. Try again in a moment.', 429)
   active += 1
   const startedAt = Date.now()

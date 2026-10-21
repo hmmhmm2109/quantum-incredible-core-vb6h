@@ -128,9 +128,10 @@ npx tsx scripts/gen-cleanup-topic-mastery.ts
 
 - **Local use only.** The Docker image and Netlify config do not contain the `claude` binary or a
   Claude login, so every AI request would fail there. Run the app on a machine where Claude CLI works.
-- **Cost and abuse.** Registration is open and every AI request uses the host's Claude account.
-  The only guard is the 4-process cap. Add per-user rate limits or disable public registration
-  before exposing the app to others.
+- **Cost and abuse.** Every AI request uses the host's Claude account. Registration closes after the
+  first account (set `ALLOW_REGISTRATION=true` to reopen it), each learner may start at most 30 Claude
+  calls per minute, and at most 4 run at once. The limiter lives in process memory, so it is not shared
+  across several server instances.
 - **Cached lessons are generic.** A cached lesson is not adapted to the learner's level.
   Delete its row in `topic_lessons` to have Claude rewrite it.
 - **Assessment progress.** "Save & next" advances without saving that answer; each question is

@@ -32,6 +32,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     return NextResponse.json({ success: true, data })
   } catch (error) {
     console.error('[API] POST /api/lesson/complete error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to mark this lesson as learned' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to mark this lesson as learned' }, { status: 500 })
   }
 })

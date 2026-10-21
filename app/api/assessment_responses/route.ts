@@ -10,7 +10,8 @@ export const GET = authMiddleware(async (req: NextRequest) => {
     const data = id ? await repo.findOne(eq(assessment_responses.id, id)) : await repo.findMany({ orderBy: desc(assessment_responses.created_at) })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to load assessment responses'
+    console.error('[API] /api/assessment_responses:', error)
+    const message = 'Unable to load assessment responses'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -25,7 +26,8 @@ export const POST = authMiddleware(async (req: NextRequest) => {
     })
     return NextResponse.json({ success: true, data }, { status: 201 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to create assessment response'
+    console.error('[API] /api/assessment_responses:', error)
+    const message = 'Unable to create assessment response'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -39,7 +41,8 @@ export const PATCH = authMiddleware(async (req: NextRequest) => {
     if (!data) return NextResponse.json({ success: false, error: 'Assessment response not found' }, { status: 404 })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to update assessment response'
+    console.error('[API] /api/assessment_responses:', error)
+    const message = 'Unable to update assessment response'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -51,7 +54,8 @@ export const DELETE = authMiddleware(async (req: NextRequest) => {
     await scopedRepo(assessment_responses).delete(eq(assessment_responses.id, id))
     return NextResponse.json({ success: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to delete assessment response'
+    console.error('[API] /api/assessment_responses:', error)
+    const message = 'Unable to delete assessment response'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })

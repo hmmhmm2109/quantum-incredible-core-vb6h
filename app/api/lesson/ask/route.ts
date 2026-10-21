@@ -69,7 +69,7 @@ export const GET = authMiddleware(async (request: NextRequest) => {
     return NextResponse.json({ success: true, data: { items: rows.map(toThreadItem), open_gaps: rows.filter((row) => isOpenGap(row.evidence)).length, has_adapted: Boolean(adapted) } })
   } catch (error) {
     console.error('[API] GET /api/lesson/ask error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to load your questions' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to load your questions' }, { status: 500 })
   }
 })
 
@@ -127,6 +127,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
   } catch (error) {
     if (error instanceof ClaudeCliError) return NextResponse.json({ success: false, error: error.message }, { status: error.status })
     console.error('[API] POST /api/lesson/ask error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to answer this question' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to answer this question' }, { status: 500 })
   }
 })

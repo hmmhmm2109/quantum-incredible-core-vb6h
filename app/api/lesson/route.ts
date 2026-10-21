@@ -226,6 +226,6 @@ ${JSON.stringify(gapList)}
   } catch (error) {
     if (error instanceof ClaudeCliError) return NextResponse.json({ success: false, error: error.message }, { status: error.status })
     console.error('[API] POST /api/lesson error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to prepare this lesson' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to prepare this lesson' }, { status: 500 })
   }
 })
