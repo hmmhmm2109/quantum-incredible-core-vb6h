@@ -61,12 +61,20 @@ export function QuestionThread({ items, render }: { items: LessonQuestion[]; ren
 }
 
 // Collapsed "Ask about this" button that opens an inline question box. `title` is the section the question is scoped to (null = whole lesson, always open).
-export function AskBox({ title, sectionIndex, variant, ask }: { title: string | null; sectionIndex: number | null; variant: string | null; ask: (sectionIndex: number | null, question: string, variant: string | null) => Promise<void> }) {
+// `prefill` (general box only) fills the text once and focuses the box, e.g. when the learner arrives from a wrong assessment answer; `onPrefilled` tells the parent it was applied.
+export function AskBox({ title, sectionIndex, variant, ask, prefill, onPrefilled }: { title: string | null; sectionIndex: number | null; variant: string | null; ask: (sectionIndex: number | null, question: string, variant: string | null) => Promise<void>; prefill?: string | null; onPrefilled?: () => void }) {
   const general = sectionIndex === null
   const [open, setOpen] = useState(general)
   const [text, setText] = useState('')
   const [asking, setAsking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!general || !prefill) return
+    setText((current) => current.trim() ? current : prefill)
+    onPrefilled?.()
+    requestAnimationFrame(() => { const box = document.getElementById('lesson-general-question') as HTMLTextAreaElement | null; box?.scrollIntoView({ behavior: 'smooth', block: 'center' }); box?.focus({ preventScroll: true }); box?.setSelectionRange(box.value.length, box.value.length) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill])
   const submit = async () => {
     if (!text.trim() || asking) return
     setAsking(true); setError(null)

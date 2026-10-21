@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { assessment_items, assessment_sessions } from '@/lib/db/schema'
 import { ClaudeCliError, runClaudeJson } from '@/lib/claude-cli'
 import { DOMAIN_ORDER, pick, shuffle } from '@/lib/assessment-topics'
+import { needsJudge, OPTION_COUNT, validate, type RawQuestion } from '@/lib/assessment-validate'
+import { stripAnswerKey } from '@/lib/assessment-redact'
 import { singleFlight } from '@/lib/single-flight'
 import { findDomain, findTopic, normalizeTopicId } from '@/lib/taxonomy'
 
@@ -12,7 +14,6 @@ export const runtime = 'nodejs'
 
 const BLUEPRINT_ID = 'ai-generated-diagnostic'
 const BLUEPRINT_VERSION = 'v1'
-const OPTION_COUNT = 4
 
 const GENERATION_SCHEMA = {
   type: 'object',
@@ -29,7 +30,7 @@ const GENERATION_SCHEMA = {
           correct_indexes: { type: 'array', items: { type: 'integer' } },
           explanation: { type: 'string' },
           misconception: { type: 'string' },
-          difficulty_factors: { type: 'array', items: { type: 'string' } },
+          difficulty_factors: { type: 'array', maxItems: 2, items: { type: 'string' } },
         },
         required: ['slot', 'stem', 'artifact', 'options', 'correct_indexes', 'explanation', 'misconception', 'difficulty_factors'],
         additionalProperties: false,
@@ -48,7 +49,11 @@ Rules for every question:
 - Options must be indistinguishable by form: similar length (within about 25% of each other), same grammatical shape, and NO "because…" justification clauses inside options (put reasoning in "explanation" instead). The correct option must not be the longest, most detailed or most hedged one.
 - For single_answer exactly one option is correct; for multiple_answer two or three are correct and the stem says to select all that apply.
 - "correct_indexes" are zero-based indexes into "options". It must be unambiguously correct; verify it before answering.
-- "explanation" says why the correct answer(s) are right; "misconception" names the main wrong belief the distractors exploit.
+- The options are mutually exclusive answers to EXACTLY the question the stem asks. If the stem names designs or approaches, e.g. (A) and (B), the options must choose between or evaluate those named designs (e.g. "Design A: …", "Design B: …", "Neither design: …"); never ask a comparison and then offer options that only discuss one side.
+- Options never refer to each other ("all of the above", "both A and B", "option 2").
+- "explanation" says why the correct answer(s) are right AND why the strongest distractor is wrong for the question as the stem asks it; "misconception" names the main wrong belief the distractors exploit.
+- Design-tradeoff angle, well formed: stem "Firmware dispatches 40 commands by id: (A) a const table of function pointers, or (B) a switch statement. Which gives the safer dispatch against an out-of-range id?" with options "Design A: the table with a bounds check", "Design B: the switch with a default case", "Design A: the table without a check", "Neither: both fault on an out-of-range id" (every option answers A-vs-B).
+- "difficulty_factors" is at most 2 short bullets naming the concepts or skills the question tests, in generic terms (e.g. "integer range vs. container size"). Never state, hint at or paraphrase the correct option or the explanation; it is shown to the learner only after they answer.
 - Do not reuse the example scenarios of earlier questions in the same set. Do not mention these rules.`
 
 // `topic` is the sub-topic hint; `topic_id` is the taxonomy topic id (absent only in plans stored before the taxonomy existed).
@@ -91,27 +96,25 @@ function parseScope(body: Record<string, unknown>): Scope | null | 'invalid' {
   return { domain_id: domain, topic_id: topicId }
 }
 
-type RawQuestion = {
-  slot: number
-  stem: string
-  artifact: string | null
-  options: string[]
-  correct_indexes: number[]
-  explanation: string
-  misconception: string
-  difficulty_factors: string[]
+const JUDGE_SCHEMA = {
+  type: 'object',
+  properties: { coherent: { type: 'boolean' }, problem: { type: 'string' } },
+  required: ['coherent'],
+  additionalProperties: false,
 }
 
-function validate(raw: RawQuestion, slot: Slot): string | null {
-  if (!raw.stem?.trim()) return 'empty stem'
-  if (!Array.isArray(raw.options) || raw.options.length !== OPTION_COUNT) return 'wrong option count'
-  const trimmed = raw.options.map((option) => option.trim())
-  if (trimmed.some((option) => !option) || new Set(trimmed.map((option) => option.toLowerCase())).size !== OPTION_COUNT) return 'blank or duplicate option'
-  const correct = [...new Set(raw.correct_indexes)]
-  if (correct.some((index) => !Number.isInteger(index) || index < 0 || index >= OPTION_COUNT)) return 'correct index out of range'
-  if (slot.type === 'single_answer' && correct.length !== 1) return 'single answer needs exactly one correct option'
-  if (slot.type === 'multiple_answer' && (correct.length < 2 || correct.length > 3)) return 'multiple answer needs 2-3 correct options'
-  return null
+const JUDGE_PROMPT = `You check one multiple-choice question for coherence between its stem and its options.
+Answer coherent=false (and say what is wrong in "problem", one sentence) if any option is not a direct answer to the exact question the stem asks, if the stem compares named designs but the options do not all weigh those designs, or if the keyed option does not answer the question as asked. Otherwise coherent=true. Do not judge difficulty or style.`
+
+// Extra cheap call for comparison/tradeoff stems only. A failed judge call never blocks a question: the heuristics already passed.
+async function judgeCoherence(question: RawQuestion): Promise<string | null> {
+  try {
+    const keyed = [...new Set(question.correct_indexes)].map((index) => question.options[index])
+    const verdict = (await runClaudeJson({ systemPrompt: JUDGE_PROMPT, message: JSON.stringify({ stem: question.stem, artifact: question.artifact, options: question.options, keyed_options: keyed, explanation: question.explanation }), jsonSchema: JUDGE_SCHEMA, timeoutMs: 60_000 })) as { coherent?: boolean; problem?: string }
+    return verdict.coherent === false ? `judge: ${verdict.problem?.trim() || 'options do not answer the stem'}` : null
+  } catch {
+    return null
+  }
 }
 
 // Only for plans stored before topics came from the taxonomy.
@@ -124,12 +127,15 @@ async function generateItem(sessionId: string, slot: Slot) {
     instruction: 'Write exactly one question for this slot.',
     slots: [{ slot: slot.slot, domain_id: slot.domain_id, topic: slot.topic_label, sub_topic: slot.topic, angle: slot.angle, difficulty: slot.difficulty, type: slot.type }],
   }
-  // One server-side retry, only when the model's answer is missing or fails validate(); CLI errors (busy, timeout, exit) go back to the client's retry.
+  // One server-side retry, only when the model's answer is missing or fails validate() / the judge; CLI errors (busy, timeout, exit) go back to the client's retry.
   let raw: RawQuestion | undefined
+  let problem: string | null = null
   for (let attempt = 0; !raw; attempt += 1) {
-    const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message: JSON.stringify(request), jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000 })
+    const message = JSON.stringify(problem ? { ...request, rejected_previous_attempt: `${problem}. Fix this; the stem and the options must answer the same question.` } : request)
+    const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message, jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000 })
     const candidate = (output as { questions?: RawQuestion[] }).questions?.[0]
-    const problem = candidate ? validate(candidate, slot) : 'question is missing'
+    problem = candidate ? validate(candidate, slot) : 'question is missing'
+    if (candidate && !problem && needsJudge(candidate.stem)) problem = await judgeCoherence(candidate)
     if (!problem) raw = candidate
     else if (attempt >= 1) throw new ClaudeCliError(`Generated question was rejected: ${problem}`, 502)
   }
@@ -148,7 +154,7 @@ async function generateItem(sessionId: string, slot: Slot) {
     difficulty_factors: { score: slot.difficulty, factors: raw.difficulty_factors ?? [] },
     validation_evidence: { state: 'model_generated', answer_key_hidden: true },
     answer_rules: { type: slot.type, partial_credit: slot.type === 'multiple_answer' ? 'Partial credit for each correct selection, penalty for wrong ones.' : 'No partial credit for this item.' },
-    // The answer key never leaves the server before submission: see stripAnswerKey() in /api/assessment_items.
+    // The answer key and the difficulty rationale never leave the server before submission: see stripAnswerKey() in lib/assessment-redact.ts.
     review_snapshot: { state: 'pending_submission', answer_key: { correct_options: correctOptions, explanation: raw.explanation, misconception: raw.misconception } },
     owner_user_id: ownerId,
   }
@@ -168,7 +174,7 @@ async function generateItem(sessionId: string, slot: Slot) {
     blueprint_id: item.blueprint_id,
     blueprint_version: item.blueprint_version,
     generated_question: item.generated_question,
-    difficulty_factors: item.difficulty_factors,
+    difficulty_factors: stripAnswerKey(item).difficulty_factors, // the rationale is returned by /api/assessment/grade, after the answer
     validation_evidence: item.validation_evidence,
     answer_rules: item.answer_rules,
   }

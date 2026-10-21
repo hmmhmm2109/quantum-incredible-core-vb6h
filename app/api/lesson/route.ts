@@ -18,6 +18,7 @@ export const runtime = 'nodejs'
 // `action` (lecture only) returns a variant of the lecture, cached under kind `lecture:<action>`.
 // `action: 'adapt'` (lecture only) rewrites the lecture for this learner's recorded knowledge gaps (see /api/lesson/ask) and caches it as `lecture:adapted`.
 // `action: 'adapt'` with `cached_only: true` only reads the stored adapted lecture (success false, HTTP 200, if none: an expected miss, not a browser-console error) and never calls Claude; the Lesson view uses it when a topic is opened.
+// part 'practice' with `cached_only: true` only reads the stored exercise (success false, HTTP 200, if none) and never calls Claude; the Lesson view uses it when a topic is opened.
 // part 'practice' without `next` returns the topic's newest exercise (kind `practice` = exercise 1, `practice:<n>` = later ones, created by `next`).
 // `next: true` (practice only) writes exercise n+1 (kind `practice:<n+1>`), harder, not repeating earlier ones and aimed at the learner's recent misses; if the newest exercise has no completed attempt from this learner yet it is returned as is (no Claude call).
 // `regenerate: true` (lecture only) deletes every cached row of the topic (lecture, variants incl. adapted, every practice exercise), writes a new lecture and re-opens the learner's gaps (their Q&A history is kept).
@@ -65,6 +66,9 @@ const practiceActivityId = (domainId: string, topicId: string, exercise: number)
 const practiceNumber = (kind: string) => kind === 'practice' ? 1 : Number(/^practice:(\d+)$/.exec(kind)?.[1] ?? 0)
 const practiceKind = (exercise: number) => exercise <= 1 ? 'practice' : `practice:${exercise}`
 
+// The retrieval answer_rule stays in the cached lecture so /api/lesson/transfer (kind 'retrieval') can grade with it, but is never sent to the client.
+const hideAnswerRule = (lecture: Record<string, unknown>) => ({ ...lecture, retrieval_check: { ...(lecture.retrieval_check as object | undefined), answer_rule: null } })
+
 function assemble(domainId: string, topicId: string, domainLabel: string, topicName: string, parts: { lecture?: unknown; learner_explanation?: string; activity?: unknown; hints?: unknown[] }, exercise = 1) {
   const stub = { ...EMPTY_ACTIVITY, id: practiceActivityId(domainId, topicId, exercise), domain_id: domainId, topic_id: topicId, domain: domainLabel, topic: topicName }
   return {
@@ -75,7 +79,7 @@ function assemble(domainId: string, topicId: string, domainLabel: string, topicN
       correctness: { score: 0, max_score: 0, confidence: 0 }, reasoning_evaluation: { score: 0, max_score: 0, summary: '' }, safety_findings: [],
     },
     hints: parts.hints ?? [],
-    lecture: parts.lecture ? { ...EMPTY_LECTURE, ...(parts.lecture as object) } : EMPTY_LECTURE,
+    lecture: parts.lecture ? hideAnswerRule({ ...EMPTY_LECTURE, ...(parts.lecture as object) }) : EMPTY_LECTURE,
     assessment: {
       mode: 'none', blueprint_id: null, blueprint_version: null, topic_coverage: [], calibrated_difficulty: { score: 0, factors: [] }, validation_state: 'none',
       answer_rules: { type: 'none', partial_credit: '' }, score: { earned: 0, possible: 0, confidence: 0 }, mastery_impact_cap: { max_level_band_delta: 0, max_score_delta: 0 }, review: [],
@@ -203,6 +207,8 @@ ${JSON.stringify(gapList)}
             result = await getOrCreate(practiceKind(exercise), async () => await runClaudeJson({ systemPrompt: PRACTICE_NEXT_PROMPT, message, jsonSchema: PRACTICE_SCHEMA }) as Record<string, unknown>)
           } else result = { content: newest.content as Record<string, unknown>, cached: true }
         } else if (newest) result = { content: newest.content as Record<string, unknown>, cached: true }
+        // Opening a lesson only looks for a stored exercise; it is written when the learner asks for it.
+        else if (body.cached_only === true) return NextResponse.json({ success: false, error: 'No practice exercise yet.' })
         else result = await getOrCreate('practice', async () => await runClaudeJson({ systemPrompt: PRACTICE_PROMPT, message: topicRequest, jsonSchema: PRACTICE_SCHEMA }) as Record<string, unknown>)
       } else result = await getOrCreate(part, generateLecture)
     }

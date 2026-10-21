@@ -88,13 +88,16 @@ In the browser, background question generation uses `lib/retry.ts`: up to 3 atte
 Slots that still fail show a banner with a Retry button, and questions are always shown in slot order.
 
 Schemas for the coach result live in `lib/coach-schema.ts`. They mirror what
-`normalizeCoachResult()` in `app/page.tsx` requires, so Claude can only return a shape the UI can render.
+`normalizeCoachResult()` in `lib/normalize.ts` requires, so Claude can only return a shape the UI can render.
 
 ## Project layout
 
 ```
-app/page.tsx            single-page app (views: home, practice, assessment, review, skill map, history, profile)
-app/sections/           page-level sections
+app/page.tsx            single-page app shell (views: home, practice, assessment, review, lesson, skill map, history, profile)
+app/sections/           page-level sections and app shell
+hooks/                  use-saved-data (saved data), use-lesson (lesson, retrieval, transfer)
+lib/normalize.ts        value coercers and normalizeCoachResult
+lib/app-types.ts        shared page types; sample-data, assessment-slots, assessment-view and home-recommendation hold pure helpers
 app/api/                route handlers
 lib/claude-cli.ts       Claude CLI runner
 lib/coach-schema.ts     JSON schemas for coach output

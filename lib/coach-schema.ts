@@ -1,5 +1,5 @@
 // JSON Schema for the coach's structured result. It mirrors what
-// normalizeCoachResult() in app/page.tsx requires, so Claude CLI can only
+// normalizeCoachResult() in lib/normalize.ts requires, so Claude CLI can only
 // return a shape the UI can render. (response_schemas/*.json is not a valid
 // JSON Schema, so it cannot be passed to --json-schema.)
 

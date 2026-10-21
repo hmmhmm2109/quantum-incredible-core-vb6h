@@ -13,8 +13,8 @@ import type { ReviewData } from '@/app/sections/result-section'
 
 type TopicRef = { id: string; label: string }
 
-// Graded answer to the transfer exercise, as returned by /api/lesson/transfer.
-export type TransferResult = { answer: string; verdict: 'correct' | 'partial' | 'incorrect'; score: number; feedback: string; strengths: string[]; missed_points: string[]; model_answer_summary: string }
+// Graded answer to the transfer exercise or the retrieval check, as returned by /api/lesson/transfer (expected_points: retrieval only, shown after grading).
+export type TransferResult = { answer: string; verdict: 'correct' | 'partial' | 'incorrect'; score: number; feedback: string; strengths: string[]; missed_points: string[]; model_answer_summary: string; expected_points?: string }
 
 type LessonSectionProps = {
   domainId: string
@@ -31,10 +31,12 @@ type LessonSectionProps = {
   nextTopic: TopicRef | null
   learnState: 'none' | 'learned' | 'assessed'
   variantLabel: string | null
-  practiceStatus: 'loading' | 'ready' | 'error'
+  practiceStatus: 'idle' | 'loading' | 'ready' | 'error'
   busy: boolean
   marking: boolean
-  retrievalFeedback: string | null
+  retrievalResult: TransferResult | null
+  retrievalStatus: 'idle' | 'grading' | 'error'
+  retrievalError: string | null
   transferResult: TransferResult | null
   transferStatus: 'idle' | 'grading' | 'error'
   transferError: string | null
@@ -46,6 +48,8 @@ type LessonSectionProps = {
   onMarkLearned: () => void
   onNextTopic: () => void
   onOpenTopic: (topicId: string) => void
+  askPrefill: string | null // text for the general question box (set when the learner comes from "Ask about this" on a wrong answer)
+  onAskPrefilled: () => void
   onStartPractice: () => void
   onRetryPractice: () => void
   onRetrievalSubmit: (answer: string) => void
@@ -72,12 +76,18 @@ const VERDICTS: Record<TransferResult['verdict'], { label: string; className: st
 // Claude sometimes numbers its section titles itself; the list adds its own number, so drop a leading "1. " / "2) ".
 const stripNumber = (title: string) => title.replace(/^\s*\d+[.)]\s+/, '')
 
+// Verdict, feedback and points of one graded answer (transfer exercise or retrieval check).
+function GradedFeedback({ result, grading }: { result: TransferResult; grading: boolean }) {
+  return <div className={`mt-3 space-y-3 rounded-xl bg-muted/70 p-3 text-sm leading-6 ${grading ? 'opacity-60' : ''}`} role="status"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-semibold">Feedback</span><Badge variant="outline" className={`rounded-full ${VERDICTS[result.verdict].className}`}>{VERDICTS[result.verdict].label}</Badge><span className="font-mono text-xs text-muted-foreground">{result.score}/100</span></div><p>{result.feedback}</p>{result.strengths.length > 0 && <div><div className="text-xs font-semibold">What was good</div><ul className="mt-1 space-y-1">{result.strengths.map((item, index) => <li key={`${item}-${index}`} className="flex gap-2 text-muted-foreground"><Check className="mt-1.5 h-3.5 w-3.5 shrink-0 text-primary" />{item}</li>)}</ul></div>}{result.missed_points.length > 0 && <div><div className="text-xs font-semibold">What to fix</div><ul className="mt-1 space-y-1">{result.missed_points.map((item, index) => <li key={`${item}-${index}`} className="flex gap-2 text-muted-foreground"><span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-600" />{item}</li>)}</ul></div>}{result.expected_points ? <div><div className="text-xs font-semibold">Expected points</div><p className="mt-1 text-muted-foreground">{result.expected_points}</p></div> : result.model_answer_summary && <div><div className="text-xs font-semibold">Model answer</div><p className="mt-1 text-muted-foreground">{result.model_answer_summary}</p></div>}</div>
+}
+
 export default function LessonSection(props: LessonSectionProps) {
-  const { domainId, topicId, variantKey, data, status, error, domainLabel, topicLabel, subtopics, prerequisites, missingPrerequisites, nextTopic, learnState, variantLabel, practiceStatus, busy, marking, retrievalFeedback, transferResult, transferStatus, transferError } = props
+  const { domainId, topicId, variantKey, data, status, error, domainLabel, topicLabel, subtopics, prerequisites, missingPrerequisites, nextTopic, learnState, variantLabel, practiceStatus, busy, marking, retrievalResult, retrievalStatus, retrievalError, transferResult, transferStatus, transferError } = props
   const [retrievalAnswer, setRetrievalAnswer] = useState('')
   // The draft lives here, not in the collapsible sections, so it survives collapsing and lecture variants; a saved answer fills an empty box on re-open.
   const [transferAnswer, setTransferAnswer] = useState('')
   const grading = transferStatus === 'grading'
+  useEffect(() => { if (retrievalResult) setRetrievalAnswer((current) => current.trim() ? current : retrievalResult.answer) }, [retrievalResult])
   useEffect(() => { if (transferResult) setTransferAnswer((current) => current.trim() ? current : transferResult.answer) }, [transferResult])
   const [openSections, setOpenSections] = useState<number[]>([0])
   const [confirmRegenerate, setConfirmRegenerate] = useState(false)
@@ -87,7 +97,7 @@ export default function LessonSection(props: LessonSectionProps) {
   // Questions asked under a section belong to the lecture text they were asked on; the rest (general ones, other lecture versions) are listed at the bottom.
   const onSection = (index: number) => questions.items.filter((item) => item.section_index === index && item.variant === variantKey)
   const elsewhere = questions.items.filter((item) => item.section_index === null || item.variant !== variantKey)
-  const practiceButton = <Button onClick={props.onStartPractice} disabled={practiceStatus !== 'ready'} className="min-h-11 gap-2 rounded-xl active:scale-[0.98] transition-transform">{practiceStatus === 'loading' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{practiceStatus === 'loading' ? 'Preparing exercise…' : 'Start practice'}</Button>
+  const practiceButton = <Button onClick={props.onStartPractice} disabled={practiceStatus === 'loading'} className="min-h-11 gap-2 rounded-xl active:scale-[0.98] transition-transform">{practiceStatus === 'loading' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{practiceStatus === 'loading' ? 'Preparing exercise…' : 'Start practice'}</Button>
   return <div className="mx-auto w-full max-w-4xl space-y-6 pb-10">
     <div className="border-b border-border/70 pb-6">
       <button onClick={props.onBack} className="mb-3 inline-flex min-h-10 items-center gap-2 rounded-xl px-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ArrowRight className="h-4 w-4 rotate-180" />Back to home</button>
@@ -117,16 +127,16 @@ export default function LessonSection(props: LessonSectionProps) {
         {lecture.recap.length > 0 && <div><div className="mb-2 text-sm font-semibold">Concise recap</div><ul className="space-y-2">{lecture.recap.map((line, index) => <li key={`${line}-${index}`} className="flex gap-2 text-sm leading-6 text-muted-foreground"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />{line}</li>)}</ul></div>}
         <AdaptBar openGaps={questions.openGaps} hasAdapted={questions.hasAdapted} showingAdapted={variantKey === 'adapted'} busy={busy} onAdapt={() => props.onAction('adapt')} />
         <div className="flex flex-wrap items-center gap-2"><Button onClick={() => { const box = document.getElementById('lesson-general-question'); box?.scrollIntoView({ behavior: 'smooth', block: 'center' }); box?.focus({ preventScroll: true }) }} variant="outline" className="min-h-10 gap-2 rounded-xl"><MessageCircleQuestion className="h-4 w-4" />Ask a question</Button>{ACTIONS.map((item) => <Button key={item.action} onClick={() => props.onAction(item.action)} disabled={busy} variant="outline" className="min-h-10 rounded-xl">{item.label}</Button>)}{busy && <span className="flex items-center gap-2 text-xs text-muted-foreground" role="status"><Loader2 className="h-4 w-4 animate-spin" />Working… variants are cached after the first time.</span>}</div>
-        <div className="rounded-2xl border border-border/70 bg-card p-4"><div className="flex items-center gap-2 text-sm font-semibold"><MessageSquareText className="h-4 w-4 text-primary" />Retrieval check</div>{lecture.retrieval_check.prompt ? <><p className="mt-2 text-sm leading-6">{lecture.retrieval_check.prompt}</p><p className="mt-2 text-xs text-muted-foreground">Answer rule: {lecture.retrieval_check.answer_rule || 'Explain your reasoning in your own words.'}</p><Textarea value={retrievalAnswer} onChange={(event) => setRetrievalAnswer(event.target.value)} className="mt-3 min-h-24 rounded-xl" placeholder="Write a short explanation…" /><Button onClick={() => { props.onRetrievalSubmit(retrievalAnswer); setRetrievalAnswer('') }} disabled={!retrievalAnswer.trim() || busy} className="mt-3 min-h-10 rounded-xl">Submit retrieval check</Button>{retrievalFeedback && <div className="mt-3 rounded-xl bg-muted/70 p-3 text-sm leading-6" role="status"><div className="mb-1 text-xs font-semibold">Feedback</div>{retrievalFeedback}</div>}</> : <p className="mt-2 text-sm text-muted-foreground">No retrieval prompt was returned for this lesson.</p>}</div>
+        <div className="rounded-2xl border border-border/70 bg-card p-4"><div className="flex items-center gap-2 text-sm font-semibold"><MessageSquareText className="h-4 w-4 text-primary" />Retrieval check</div>{lecture.retrieval_check.prompt ? <><p className="mt-2 text-sm leading-6">{lecture.retrieval_check.prompt}</p><Textarea value={retrievalAnswer} onChange={(event) => setRetrievalAnswer(event.target.value)} maxLength={4000} aria-label="Your answer to the retrieval check" className="mt-3 min-h-24 rounded-xl" placeholder="Write a short explanation…" /><div className="mt-3 flex flex-wrap items-center gap-3"><Button onClick={() => props.onRetrievalSubmit(retrievalAnswer)} disabled={!retrievalAnswer.trim() || retrievalStatus === 'grading'} className="min-h-10 gap-2 rounded-xl">{retrievalStatus === 'grading' && <Loader2 className="h-4 w-4 animate-spin" />}{retrievalStatus === 'grading' ? 'Grading…' : retrievalResult ? 'Submit again' : 'Submit retrieval check'}</Button>{retrievalStatus === 'grading' && <span className="text-xs text-muted-foreground" role="status">Claude is grading your answer, this can take up to a minute.</span>}</div>{retrievalStatus === 'error' && <div role="alert" className="mt-3 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><TerminalSquare className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="font-semibold">Your answer could not be graded.</span> {retrievalError} Your text is kept; press Submit retrieval check to try again.</span></div>}{retrievalResult && <GradedFeedback result={retrievalResult} grading={retrievalStatus === 'grading'} />}</> : <p className="mt-2 text-sm text-muted-foreground">No retrieval prompt was returned for this lesson.</p>}</div>
         <div className="rounded-2xl border border-border/70 bg-card p-4"><div className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary" />Transfer exercise</div><p className="mt-2 text-sm leading-6 text-muted-foreground">{lecture.transfer_exercise.prompt || 'The coach did not attach a transfer exercise.'}</p>{lecture.transfer_exercise.format && <Badge variant="outline" className="mt-3 rounded-full">{lecture.transfer_exercise.format}</Badge>}
           {lecture.transfer_exercise.prompt && <>
             <Textarea value={transferAnswer} onChange={(event) => setTransferAnswer(event.target.value)} maxLength={4000} aria-label="Your answer to the transfer exercise" className="mt-3 min-h-40 rounded-xl font-mono text-sm" spellCheck={false} placeholder="Write your answer. Code, commands or a short explanation all work…" />
             <div className="mt-3 flex flex-wrap items-center gap-3"><Button onClick={() => props.onTransferSubmit(transferAnswer)} disabled={!transferAnswer.trim() || grading} className="min-h-10 gap-2 rounded-xl">{grading && <Loader2 className="h-4 w-4 animate-spin" />}{grading ? 'Grading…' : transferResult ? 'Submit again' : 'Submit answer'}</Button>{grading && <span className="text-xs text-muted-foreground" role="status">Claude is grading your answer, this can take up to a minute.</span>}</div>
             {transferStatus === 'error' && <div role="alert" className="mt-3 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"><TerminalSquare className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="font-semibold">Your answer could not be graded.</span> {transferError} Your text is kept; press Submit answer to try again.</span></div>}
-            {transferResult && <div className={`mt-3 space-y-3 rounded-xl bg-muted/70 p-3 text-sm leading-6 ${grading ? 'opacity-60' : ''}`} role="status"><div className="flex flex-wrap items-center gap-2"><span className="text-xs font-semibold">Feedback</span><Badge variant="outline" className={`rounded-full ${VERDICTS[transferResult.verdict].className}`}>{VERDICTS[transferResult.verdict].label}</Badge><span className="font-mono text-xs text-muted-foreground">{transferResult.score}/100</span></div><p>{transferResult.feedback}</p>{transferResult.strengths.length > 0 && <div><div className="text-xs font-semibold">What was good</div><ul className="mt-1 space-y-1">{transferResult.strengths.map((item, index) => <li key={`${item}-${index}`} className="flex gap-2 text-muted-foreground"><Check className="mt-1.5 h-3.5 w-3.5 shrink-0 text-primary" />{item}</li>)}</ul></div>}{transferResult.missed_points.length > 0 && <div><div className="text-xs font-semibold">What to fix</div><ul className="mt-1 space-y-1">{transferResult.missed_points.map((item, index) => <li key={`${item}-${index}`} className="flex gap-2 text-muted-foreground"><span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-600" />{item}</li>)}</ul></div>}{transferResult.model_answer_summary && <div><div className="text-xs font-semibold">Model answer</div><p className="mt-1 text-muted-foreground">{transferResult.model_answer_summary}</p></div>}</div>}
+            {transferResult && <GradedFeedback result={transferResult} grading={grading} />}
           </>}
         </div>
-        <div className="space-y-3 rounded-2xl border border-border/70 bg-card p-4"><div className="flex items-center gap-2 text-sm font-semibold"><MessageSquareText className="h-4 w-4 text-primary" />Your questions</div><QuestionThread items={elsewhere.map((item) => item.section_title && item.section_index !== null ? { ...item, question: `${item.question} (on: ${item.section_title})` } : item)} render={renderMarkdown} /><AskBox key={variantKey ?? 'base'} title={null} sectionIndex={null} variant={variantKey} ask={questions.ask} /></div>
+        <div className="space-y-3 rounded-2xl border border-border/70 bg-card p-4"><div className="flex items-center gap-2 text-sm font-semibold"><MessageSquareText className="h-4 w-4 text-primary" />Your questions</div><QuestionThread items={elsewhere.map((item) => item.section_title && item.section_index !== null ? { ...item, question: `${item.question} (on: ${item.section_title})` } : item)} render={renderMarkdown} /><AskBox key={variantKey ?? 'base'} title={null} sectionIndex={null} variant={variantKey} ask={questions.ask} prefill={props.askPrefill} onPrefilled={props.onAskPrefilled} /></div>
       </CardContent></Card>
 
       <Card className="rounded-3xl border-border/70 shadow-sm"><CardContent className="space-y-4 p-6">

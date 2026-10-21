@@ -8,7 +8,7 @@ export const runtime = 'nodejs'
 
 // Grades one multiple-choice item on the server against the answer key stored when
 // Claude wrote the question, so submitting is instant and does not spend a Claude call.
-// The response has the same shape as the coach result that app/page.tsx already renders.
+// The response has the same shape as the coach result that lib/normalize.ts normalizes for the UI.
 // The result is also persisted here, in one transaction: the response row, the topic mastery
 // update (bounded by mastery_impact_cap) and a learning event. Grading is idempotent per item,
 // so a re-submit returns the stored result and never applies mastery twice. When the last planned
@@ -90,6 +90,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         mode: 'knowledge_check', blueprint_id: item.blueprint_id, blueprint_version: item.blueprint_version,
         topic_coverage: [{ domain_id: domainId, topic_id: topicId, weight: 1 }],
         calibrated_difficulty: { score: difficulty.score ?? 3, factors: difficulty.factors ?? [] },
+        difficulty_rationale: difficulty.factors ?? [], // hidden until now: it can paraphrase the answer key
         validation_state: 'model generated, graded on the server',
         answer_rules: (item.answer_rules as { type?: string; partial_credit?: string } | undefined) as { type: string; partial_credit: string },
         score: { earned: Number(earned.toFixed(2)), possible: 1, confidence },
