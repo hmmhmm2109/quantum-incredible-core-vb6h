@@ -45,6 +45,7 @@ and clients cannot overwrite it.
    DATABASE_URL=postgresql://embedpath:embedpath@localhost:5432/embedpath
    DATABASE_PROVIDER=postgres
    APP_JWT_SECRET=<a long random string, e.g. output of: openssl rand -hex 32>
+   # optional: ALLOW_REGISTRATION=true   (registration is closed once the first account exists)
    ```
 3. Install and migrate:
    ```bash
@@ -55,7 +56,12 @@ and clients cannot overwrite it.
    ```bash
    npm run dev
    ```
-   Register an account on the first screen.
+   Register an account on the first screen. Only the first account can register unless
+   `ALLOW_REGISTRATION=true` is set.
+
+   On WSL, keep the project on the Linux filesystem (for example `~/`) or start the server with
+   `WATCHPACK_POLLING=true npm run dev`. Under `/mnt/c`, `/mnt/e` and similar drives Next.js does not
+   notice file changes, so the browser keeps serving stale code until the server is restarted.
 
 After editing `lib/db/schema.ts`, run `npm run db:generate` then `npm run db:migrate`.
 Do not edit the generated SQL in `drizzle/` by hand.
@@ -65,7 +71,9 @@ Do not edit the generated SQL in `drizzle/` by hand.
 All Claude calls go through `lib/claude-cli.ts`, which spawns `claude --print` with
 `--tools ''` (no tools, no file access) and `--json-schema`, so the output is validated before
 the app sees it. Errors are reduced to a safe message; stderr stays in the server log. At most
-4 Claude processes run at once; extra requests get HTTP 429.
+4 Claude processes run at once and each learner may start 30 per minute; extra requests get HTTP 429.
+Every spawn logs `[claude-cli] purpose=<route/step> duration_ms=<n> result=<exit code | timeout | error>`.
+Lecture, variant and adapt calls may take up to 240 s (a full lecture takes about 110 s); other calls 120 s.
 
 | Route | Purpose |
 |---|---|
@@ -75,7 +83,7 @@ the app sees it. Errors are reduced to a safe message; stderr stays in the serve
 | `POST /api/lesson` | `{ domain_id, topic_id, part: "lecture" \| "practice", action?, regenerate? }`. Cached in `topic_lessons`. `action` is `shorter`, `another-example`, `prerequisites` or `adapt` (rewrites the lecture for the learner's open gaps, latest 8, cached as `lecture:adapted`; unknown actions return 400). |
 | `POST /api/lesson/ask` | `{ domain_id, topic_id, section_index \| null, question, variant? }`. Claude answers a question about one cached lecture section (text read server-side; question max 1500 characters) and notes whether it reveals a knowledge gap. Saved as a `learning_events` row of type `question` (no migration). `GET` with the ids returns the saved Q&A, the open-gap count and whether an adapted lecture exists. |
 | `POST /api/lesson/transfer` | `{ domain_id, topic_id, answer, variant? }`. Claude grades the answer to the cached lesson's transfer exercise (max 4000 characters) and saves an `attempts` row plus a `transfer` learning event; `topic_mastery` is not changed. `GET` with the same ids returns the latest saved answer and feedback. |
-| `POST /api/claude` | General coach call (lecture actions, retrieval checks, free-form coach requests). |
+| `POST /api/claude` | General coach call (practice submission and the legacy review actions). Takes `{ message }` only; it never receives an assessment answer key. |
 | `/api/<table>` | CRUD for `learner_profiles`, `topic_mastery`, `activities`, `attempts`, `recommendations`, `assessment_sessions`, `assessment_items`, `assessment_responses`, `learning_events`, `study_sessions`. Owner-scoped via `scopedRepo`. |
 | `/api/auth/*` | Register, login, logout, current user. |
 
@@ -136,5 +144,7 @@ npx tsx scripts/gen-cleanup-topic-mastery.ts
   Delete its row in `topic_lessons` to have Claude rewrite it.
 - **Assessment progress.** "Save & next" advances without saving that answer; each question is
   graded when you press Submit.
+- **Cached lessons keep the prompt they were written with.** Lessons cached before the transfer-exercise
+  rules changed may have a code-less or compile-and-run transfer exercise; press Regenerate on the lesson.
 - **Hardcoded UI numbers.** The header's "6 day streak" and "12 exercises" are placeholders.
 - **Lint.** `npm run lint` uses `next lint`, which Next 16 removed; run `npx eslint .` instead.

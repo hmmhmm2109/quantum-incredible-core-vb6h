@@ -15,11 +15,20 @@ Claude CLI on the host writes the lessons and questions. Built so far:
 - Assessments graded server-side (`/api/assessment/grade`), which updates `topic_mastery` and returns `mastery_delta` feedback.
 - Resume and restart of in-progress assessment sessions.
 - Coherence checks plus an LLM judge pass for generated questions.
+- Six domains: C, C++, Linux, Networking, BSP and **QNX** (12 topics, added last; 63 topics in total). The diagnostic plans one question per domain. `DOMAIN_ORDER` and the grade labels derive from `lib/taxonomy.ts`.
+- Hardening: `/api/claude` takes only `{ message }` (no answer key reaches a prompt); registration closes after the first account (`ALLOW_REGISTRATION=true` reopens it); 30 Claude spawns per learner per minute and 4 at once; routes log the real error and return a generic message; every spawn logs `purpose`, duration and result.
+- Lessons: lecture generation has a 240 s timeout; the transfer exercise must be self-contained and answerable in text; retrieval/transfer prompts render fenced code, lesson examples render as preformatted code.
+- Questions are written one ahead of the learner (see open work 1).
+
+All of this is committed locally; check `git status` and `git log origin/main..` and push before switching machines.
 
 ## How to continue on another machine
 
 - Prerequisites: Node.js 20, PostgreSQL 14+, `claude` CLI on `PATH` and logged in (`claude auth status`).
-- Env (in git-ignored `.env.local`): `DATABASE_URL`, `DATABASE_PROVIDER=postgres`, `APP_JWT_SECRET`. Values: see README "Setup".
+- Env (in git-ignored `.env.local`): `DATABASE_URL`, `DATABASE_PROVIDER=postgres`, `APP_JWT_SECRET`; optional `ALLOW_REGISTRATION=true`. Values: see README "Setup". `.env.local` is not in git, so recreate it.
+- The database does not travel with git: lessons, assessments and mastery stay in the old machine's Postgres. A new machine starts empty (register the first account, the seed runs on first load). To carry the data over: `pg_dump "$DATABASE_URL" > embedpath.sql` there, `psql "$DATABASE_URL" < embedpath.sql` here (after creating the database).
+- On WSL keep the repo on the Linux filesystem or run `WATCHPACK_POLLING=true npm run dev`; under `/mnt/<drive>` file changes are not detected, which caused several "I fixed it but the browser still shows the old thing" rounds.
+- First run after pulling: restart the dev server (taxonomy, schema and route changes are not hot-reloaded reliably), then Ctrl+F5.
 - Install and migrate: `npm install`, then `npm run db:migrate`.
 - Run: `npm run dev` (port 3333); production build: `npm run build`.
 - Check types: `npm run typecheck`. There is no test suite.
@@ -28,8 +37,8 @@ Claude CLI on the host writes the lessons and questions. Built so far:
 ## Open work / next steps (priority order)
 
 1. **Questions are written one ahead (implemented, unverified in a browser).** `generateSlots` in `app/page.tsx` parks its workers until the learner has reached the slot before (`frontierRef`, `reachSlot`), so start and resume no longer write every slot at once and leaving early costs at most one unopened question. Manual retry (`retryMissing`) is eager. Check by hand: start a 5-question diagnostic and watch the log for `purpose=assessment/generate` (one call, then one more per question reached); resume a half-finished session; jump to a not-yet-written slot from the coverage panel; "Save & next" on the last written slot. `pending` still counts unwritten slots, so some "still being written" toasts now cover a slot that has not started.
-2. **Spawn observability.** `lib/claude-cli.ts` (`spawnClaude`) does not record which route/purpose started a spawn, so stray calls could not be attributed. Log route, purpose, duration and exit code per spawn.
-3. **Legacy retrieval path leaks `answer_rule`.** `handleRetrievalSubmit` / `handleLectureAction` in `app/page.tsx` (plus `hooks/use-lesson.ts`, `app/sections/result-section.tsx`) send `review.lecture.retrieval_check.answer_rule` through `/api/claude`. Low risk for single-user. Move grading server-side like `/api/lesson/transfer` with `kind: 'retrieval'`, then drop the legacy handlers if unused.
+2. **Review the QNX content (new, unreviewed).** The 12 topics and their sub-topics in `lib/taxonomy.ts` were written from general QNX Neutrino knowledge, not checked against the QNX docs for the version you use (7.0 / 7.1 / Safety). Open each topic's lesson and compare. Known doubt: what `slay -f` does (one generated example used it). Network (`io-pkt` vs `io-sock`) and filesystem topics are the most version-dependent. The first generated QNX example was a weak ASCII diagram, not a worked example: consider a lecture-prompt rule that examples must use real commands/API names of the domain and trace one call step by step.
+3. **Legacy retrieval path leaks `answer_rule`.** `handleRetrievalSubmit` / `handleLectureAction` in `app/page.tsx` (plus `hooks/use-lesson.ts`, `app/sections/result-section.tsx`) send `review.lecture.retrieval_check.answer_rule` through `/api/claude`. Low risk for single-user (the answer-key leak through `/api/claude` itself is fixed). Move grading server-side like `/api/lesson/transfer` with `kind: 'retrieval'`, then drop the legacy handlers if unused.
 4. **Question generation (`app/api/assessment/generate/route.ts`, `lib/assessment-validate.ts`).**
    - `judgeCoherence` stays fail-open on purpose (a failed judge call must not discard a question that passed the heuristics); it now logs a warning and stores `validation_evidence.judge` (`not_needed` | `passed` | `skipped`) on the item.
    - The A/B coherence heuristic only fires when the stem names the designs in backticks.
@@ -48,6 +57,10 @@ Claude CLI on the host writes the lessons and questions. Built so far:
 8. **Data model.** All `topic_lessons` rows, including `lecture:adapted`, are shared, not per user (fine for single-user; needs owner scoping for multi-user). Old rows with obsolete ids remain unused. After taxonomy edits, regenerate `scripts/cleanup-topic-mastery.sql` with `npx tsx scripts/gen-cleanup-topic-mastery.ts` and run it by hand with `psql` (see README "Taxonomy maintenance").
 9. **Cleanup candidates.** `plan-handoff/prd.md` still describes "Explain more" and a Lyzr hosted agent; update or remove. Unverified: removing the fetch interceptor dropped the automatic `Authorization: Bearer` header, so auth relies on the `auth_token` cookie (only matters inside cross-origin iframes).
 10. **Seed / restart.** The user seed uses the first taxonomy topic per domain. "Start a new assessment instead" only matters when several in-progress sessions exist for the same scope.
+11. **Transfer prompt wording.** One generated transfer exercise ended with an ambiguous sentence ("the way the second test was probably meant"). Add a prompt rule that the last sentence states only what the learner must do. Regenerating a lesson also deletes its practice rows (see 6).
+12. **Security leftovers.** Registration is only closed after the first account, so a second machine or user needs `ALLOW_REGISTRATION=true`. The rate limiter is in process memory (not shared across instances). Cookie is `SameSite=None; Secure` in production and mutating routes do not check `Origin` (matters only if the app runs in a cross-origin iframe). Generic CRUD routes still accept arbitrary fields on PATCH (`owner_user_id` is ignored by `scopedRepo`, but a learner can write their own `topic_mastery.score`). `access-check` fails open when `ARCHITECT_BACKEND_URL` / `APP_ID` are missing.
+13. **Legacy review view.** `app/sections/result-section.tsx` still renders the retrieval prompt as plain text (no code fences) and belongs to the legacy path in 3.
+14. **No automated tests.** Cheapest wins: `lib/assessment-validate.ts` and `lib/rate-limit.ts` (pure functions).
 
 ## Testing notes
 

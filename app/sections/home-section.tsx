@@ -174,7 +174,7 @@ export default function HomeSection({
         <Card className="rounded-3xl border-border/70 shadow-sm">
           <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
             <div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Five independent tracks</div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Six independent tracks</div>
               <CardTitle className="mt-2 text-xl">Your domains</CardTitle>
             </div>
             <Compass className="h-5 w-5 text-primary" />
