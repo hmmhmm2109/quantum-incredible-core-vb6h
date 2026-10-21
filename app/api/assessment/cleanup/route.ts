@@ -19,7 +19,8 @@ export const POST = authMiddleware(async (_req: NextRequest) => {
     )
     return NextResponse.json({ success: true, data: { abandoned: stale.length } })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to clean up assessment sessions'
+    console.error('[API] /api/assessment/cleanup:', error)
+    const message = 'Unable to clean up assessment sessions'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })

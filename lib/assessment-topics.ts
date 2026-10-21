@@ -5,7 +5,7 @@ import { DOMAINS } from '@/lib/taxonomy'
 // Flat sub-topic hints per domain, kept for callers that only need free text.
 export const DOMAIN_TOPICS: Record<string, string[]> = Object.fromEntries(DOMAINS.map((domain) => [domain.id, domain.topics.flatMap((topic) => topic.subtopics)]))
 
-export const DOMAIN_ORDER = ['c', 'cpp', 'linux', 'networking', 'bsp'] as const
+export const DOMAIN_ORDER: readonly string[] = DOMAINS.map((domain) => domain.id)
 
 import { randomInt } from 'node:crypto'
 

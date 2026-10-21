@@ -2,6 +2,7 @@ import { authMiddleware, getCurrentUserId, getDb, scopedRepo } from 'lyzr-archit
 import { and, eq, sql } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
 import { assessment_items, assessment_responses, assessment_sessions, learning_events, topic_mastery } from '@/lib/db/schema'
+import { DOMAINS } from '@/lib/taxonomy'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -28,7 +29,7 @@ async function sessionProgress(tx: Tx, ownerId: string, sessionId: string) {
 type AnswerKey = { correct_options?: string[]; explanation?: string; misconception?: string }
 
 const CONFIDENCE: Record<string, number> = { low: 0.3, medium: 0.6, high: 0.9 }
-const DOMAIN_LABEL: Record<string, string> = { c: 'C', cpp: 'C++', linux: 'Linux', networking: 'Networking', bsp: 'BSP' }
+const DOMAIN_LABEL: Record<string, string> = Object.fromEntries(DOMAINS.map((domain) => [domain.id, domain.label]))
 const BANDS = ['Basic', 'Intermediate', 'Advanced']
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
@@ -166,6 +167,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     })
   } catch (error) {
     console.error('[API] POST /api/assessment/grade error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to grade this answer' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to grade this answer' }, { status: 500 })
   }
 })

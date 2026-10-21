@@ -10,7 +10,8 @@ export const GET = authMiddleware(async (req: NextRequest) => {
     const data = id ? await repo.findOne(eq(topic_mastery.id, id)) : await repo.findMany({ orderBy: desc(topic_mastery.created_at) })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to load topic mastery'
+    console.error('[API] /api/topic_mastery:', error)
+    const message = 'Unable to load topic mastery'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -24,7 +25,8 @@ export const POST = authMiddleware(async (req: NextRequest) => {
     })
     return NextResponse.json({ success: true, data }, { status: 201 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to create topic mastery'
+    console.error('[API] /api/topic_mastery:', error)
+    const message = 'Unable to create topic mastery'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -38,7 +40,8 @@ export const PATCH = authMiddleware(async (req: NextRequest) => {
     if (!data) return NextResponse.json({ success: false, error: 'Topic mastery not found' }, { status: 404 })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to update topic mastery'
+    console.error('[API] /api/topic_mastery:', error)
+    const message = 'Unable to update topic mastery'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -50,7 +53,8 @@ export const DELETE = authMiddleware(async (req: NextRequest) => {
     await scopedRepo(topic_mastery).delete(eq(topic_mastery.id, id))
     return NextResponse.json({ success: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to delete topic mastery'
+    console.error('[API] /api/topic_mastery:', error)
+    const message = 'Unable to delete topic mastery'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })

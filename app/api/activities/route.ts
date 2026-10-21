@@ -10,7 +10,8 @@ export const GET = authMiddleware(async (req: NextRequest) => {
     const data = id ? await repo.findOne(eq(activities.id, id)) : await repo.findMany({ orderBy: desc(activities.created_at) })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to load activities'
+    console.error('[API] /api/activities:', error)
+    const message = 'Unable to load activities'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -25,7 +26,8 @@ export const POST = authMiddleware(async (req: NextRequest) => {
     })
     return NextResponse.json({ success: true, data }, { status: 201 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to create activity'
+    console.error('[API] /api/activities:', error)
+    const message = 'Unable to create activity'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -39,7 +41,8 @@ export const PATCH = authMiddleware(async (req: NextRequest) => {
     if (!data) return NextResponse.json({ success: false, error: 'Activity not found' }, { status: 404 })
     return NextResponse.json({ success: true, data })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to update activity'
+    console.error('[API] /api/activities:', error)
+    const message = 'Unable to update activity'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })
@@ -51,7 +54,8 @@ export const DELETE = authMiddleware(async (req: NextRequest) => {
     await scopedRepo(activities).delete(eq(activities.id, id))
     return NextResponse.json({ success: true })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to delete activity'
+    console.error('[API] /api/activities:', error)
+    const message = 'Unable to delete activity'
     return NextResponse.json({ success: false, error: message }, { status: 400 })
   }
 })

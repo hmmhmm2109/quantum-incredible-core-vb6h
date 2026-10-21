@@ -76,6 +76,20 @@ export const DOMAINS: TaxonomyDomain[] = [
     ['clock-power', 'Clocks & power', ['enabling clocks before register access', 'clock trees and power domains', 'regulators and sequencing', 'suspend/resume and runtime PM']],
     ['board-bring-up', 'Board bring-up', ['UART console and minimal boot', 'first power-on checklist', 'DDR initialization and memory test', 'isolating hardware vs software faults']],
   ]),
+  domain('qnx', 'QNX', [
+    ['microkernel-architecture', 'Microkernel architecture', ['QNX Neutrino microkernel vs monolithic kernel', 'what lives in the kernel: threads, scheduling, IPC, timers, interrupt redirection', 'procnto and user-space services such as drivers and filesystems', 'fault isolation and restarting a failed driver']],
+    ['message-passing', 'Message passing IPC', ['MsgSend, MsgReceive and MsgReply and the blocked states they cause', 'channels and connections (ChannelCreate, ConnectAttach)', 'send/receive/reply semantics and priority inheritance through messages', 'pulses and asynchronous notification']],
+    ['scheduling-priorities', 'Scheduling & priorities', ['priority-based preemptive scheduling: FIFO, round-robin, sporadic', 'priority ranges and limits for unprivileged processes', 'priority inversion and priority inheritance', 'adaptive partitioning and CPU budgets']],
+    ['threads-synchronization', 'Threads & synchronization', ['pthread mutexes, condition variables and semaphores', 'reading thread states with pidin', 'mutex protocols and priority inheritance', 'deadlock diagnosis']],
+    ['processes-memory', 'Processes & memory', ['process address spaces and MMU protection', 'shared memory with shm_open and mmap', 'locking memory (mlock) for real-time paths', 'spawn vs fork and what a child inherits']],
+    ['interrupts-timers', 'Interrupts & timers', ['InterruptAttach vs InterruptAttachEvent', 'what an ISR may and may not do', 'clock period, timers and timer events', 'interrupt latency and scheduling jitter']],
+    ['resource-managers', 'Resource managers', ['the resource manager framework and the pathname space', 'iofunc handlers: io_read, io_write and devctl', 'OCB and attribute structures', 'threading and dispatch in a resource manager']],
+    ['boot-startup', 'Boot & startup', ['IPL, startup program and procnto handoff', 'boot image (IFS) and buildfile contents', 'startup scripts and launching services', 'BSP layout and board bring-up']],
+    ['networking-io-pkt', 'Networking stack', ['the network stack as a resource manager (io-pkt / io-sock)', 'interface configuration with ifconfig and drivers', 'Qnet transparent distributed networking', 'diagnosing with nicinfo and netstat']],
+    ['filesystems-storage', 'Filesystems & storage', ['QNX6 power-safe filesystem and flash filesystems', 'mounting and the pathname space', 'block drivers and devb', 'fsync and data integrity on power loss']],
+    ['debugging-tracing', 'Debugging & tracing', ['pidin, hogs and slog2info', 'kernel event tracing with tracelogger and the System Profiler', 'gdb, qconn and core dumps with dumper', 'finding CPU hogs and priority inversion']],
+    ['safety-availability', 'Safety & availability', ['safety-certified QNX variants and what certification does and does not cover', 'adaptive partitioning vs hypervisor isolation', 'watchdogs and the High Availability Manager', 'freedom from interference']],
+  ]),
 ]
 
 export const DOMAIN_IDS = DOMAINS.map((entry) => entry.id)

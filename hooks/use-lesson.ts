@@ -157,7 +157,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
   const lessonRetrievalSubmit = (answer: string) => submitAnswer('retrieval', answer)
   const lessonTransferSubmit = (answer: string) => submitAnswer('transfer', answer)
   // Topic practice: the same cached POST /api/lesson {part:'practice'} exercise the Lesson view uses (0 Claude calls when cached, one write otherwise).
-  // `next` asks the server for a NEW exercise of the topic (one Claude call, ~30-60s) unless the newest one is still untried; without it the newest cached exercise opens.
+  // `next` asks the server for a NEW exercise of the topic (one Claude call, ~1-2 min) unless the newest one is still untried; without it the newest cached exercise opens.
   const openTopicPractice = async (domainId: string, topicId: string, fromSkillMap = true, next = false) => {
     const request = ++practiceReqRef.current
     setPracticeLoad({ domainId, topicId, status: 'loading', error: null })

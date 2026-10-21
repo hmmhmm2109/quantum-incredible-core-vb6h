@@ -23,8 +23,13 @@ export const runtime = 'nodejs'
 // `next: true` (practice only) writes exercise n+1 (kind `practice:<n+1>`), harder, not repeating earlier ones and aimed at the learner's recent misses; if the newest exercise has no completed attempt from this learner yet it is returned as is (no Claude call).
 // `regenerate: true` (lecture only) deletes every cached row of the topic (lecture, variants incl. adapted, every practice exercise), writes a new lecture and re-opens the learner's gaps (their Q&A history is kept).
 
+// A full lecture took ~110s in practice, so the 120s default left almost no margin.
+const LECTURE_TIMEOUT_MS = 240_000
+
 const LECTURE_PROMPT = `You are the Embedded Systems Learning Coach for EmbedPath. Write a lesson-first explanation of ONE topic for an engineer new to it.
 Order: (1) theory explanation, (2) a guided worked example with concrete code, commands or a trace, (3) common pitfalls, then a retrieval check and a transfer exercise prompt (prompts only, do not give answers away).
+retrieval_check: ONE short question about the lesson's core idea that is answerable in 2-3 sentences from memory. If it refers to code, put the code in the prompt itself inside a \`\`\` fence.
+transfer_exercise: ONE new situation that applies the SAME core idea of the lesson, different from the worked example (a transfer, not a review of everything). Focus on one or two subtopics, never all of them. The prompt must be self-contained: the learner cannot see anything outside it, so any code, register layout or message format you refer to must be written out in full inside the prompt (code in a \`\`\` fence, at most 15 lines), never described as "a function you are given". The learner types the answer in a text box and cannot run anything, so ask for a short written answer (about 3-6 sentences or a few corrected lines), never for compiling, running, sanitizers or files, and answerable in about 5 minutes. Use \`format\` to say what the answer should contain.
 Write 4 sections, each roughly 150-250 words, examples short.
 Explain for a learner who has never seen the term. Inside every section introduce each key term in this order: (a) a one-sentence plain-language definition with no jargon, (b) a concrete analogy or a tiny example, (c) only then the precise technical details and pitfalls. Never use a technical term before it is defined; define it on first use or point to the labeled prerequisite that covers it. Prefer short sentences and one idea per sentence, and say what a thing is for before how it works. Every listed subtopic must be covered by at least one section or bullet, and the lesson should build on the previous topic without repeating it. Use selected_depth "standard". Never mix in other topics except clearly labeled prerequisites. Do not claim production hardware safety without human review. Respond only through the required JSON schema.`
 
@@ -136,7 +141,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       `Previous topic in the course: ${previous?.label ?? 'none (this is the first topic)'}`,
       'selected_topic_only: true',
     ].join('\n')
-    const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA }) as Record<string, unknown>
+    const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/lecture' }) as Record<string, unknown>
 
     let result: { content: Record<string, unknown>; cached: boolean }
     let exercise = 1
@@ -176,7 +181,7 @@ ${JSON.stringify(base.content)}
 
 <learner_gaps>
 ${JSON.stringify(gapList)}
-</learner_gaps>`, jsonSchema: LECTURE_SCHEMA }) as Record<string, unknown>
+</learner_gaps>`, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/adapt' }) as Record<string, unknown>
           await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind, content: generated, model: MODEL }).onConflictDoUpdate({ target: [topic_lessons.domain_id, topic_lessons.topic_id, topic_lessons.kind], set: { content: generated, model: MODEL, updated_at: new Date() } })
           await db.update(learning_events).set({ evidence: sql`${learning_events.evidence} || ${JSON.stringify({ resolved: true, resolved_at: new Date().toISOString() })}::jsonb` }).where(inArray(learning_events.id, gaps.map((row) => row.id)))
           return generated
@@ -186,7 +191,7 @@ ${JSON.stringify(gapList)}
     } else if (action) {
       result = await getOrCreate(kind, async () => {
         const base = await getOrCreate('lecture', generateLecture)
-        return await runClaudeJson({ systemPrompt: `${LECTURE_PROMPT}\nYou are producing a VARIANT of an existing lesson. ${LECTURE_ACTIONS[action]}`, message: `${topicRequest}\n\nExisting lesson (JSON):\n${JSON.stringify(base.content)}`, jsonSchema: LECTURE_SCHEMA }) as Record<string, unknown>
+        return await runClaudeJson({ systemPrompt: `${LECTURE_PROMPT}\nYou are producing a VARIANT of an existing lesson. ${LECTURE_ACTIONS[action]}`, message: `${topicRequest}\n\nExisting lesson (JSON):\n${JSON.stringify(base.content)}`, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/variant' }) as Record<string, unknown>
       })
     } else {
       if (part === 'practice') {
@@ -204,12 +209,12 @@ ${JSON.stringify(gapList)}
               .filter(Boolean).slice(0, 3)
             const earlier = rows.slice(-5).map((row) => { const a = (row.content as { activity?: { prompt?: string; level_band?: string } }).activity; return `- exercise ${practiceNumber(row.kind)} (${a?.level_band ?? 'unknown level'}): ${String(a?.prompt ?? '').replace(/\s+/g, ' ').slice(0, 220)}` })
             const message = `${topicRequest}\n\n<previous_exercises>\n${earlier.join('\n')}\n</previous_exercises>\n<weak_points>\n${misses.length > 0 ? misses.map((line) => `- ${line}`).join('\n') : '- none recorded'}\n</weak_points>`
-            result = await getOrCreate(practiceKind(exercise), async () => await runClaudeJson({ systemPrompt: PRACTICE_NEXT_PROMPT, message, jsonSchema: PRACTICE_SCHEMA }) as Record<string, unknown>)
+            result = await getOrCreate(practiceKind(exercise), async () => await runClaudeJson({ systemPrompt: PRACTICE_NEXT_PROMPT, message, jsonSchema: PRACTICE_SCHEMA, purpose: 'lesson/practice-next' }) as Record<string, unknown>)
           } else result = { content: newest.content as Record<string, unknown>, cached: true }
         } else if (newest) result = { content: newest.content as Record<string, unknown>, cached: true }
         // Opening a lesson only looks for a stored exercise; it is written when the learner asks for it.
         else if (body.cached_only === true) return NextResponse.json({ success: false, error: 'No practice exercise yet.' })
-        else result = await getOrCreate('practice', async () => await runClaudeJson({ systemPrompt: PRACTICE_PROMPT, message: topicRequest, jsonSchema: PRACTICE_SCHEMA }) as Record<string, unknown>)
+        else result = await getOrCreate('practice', async () => await runClaudeJson({ systemPrompt: PRACTICE_PROMPT, message: topicRequest, jsonSchema: PRACTICE_SCHEMA, purpose: 'lesson/practice' }) as Record<string, unknown>)
       } else result = await getOrCreate(part, generateLecture)
     }
 
@@ -223,6 +228,6 @@ ${JSON.stringify(gapList)}
   } catch (error) {
     if (error instanceof ClaudeCliError) return NextResponse.json({ success: false, error: error.message }, { status: error.status })
     console.error('[API] POST /api/lesson error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to prepare this lesson' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to prepare this lesson' }, { status: 500 })
   }
 })

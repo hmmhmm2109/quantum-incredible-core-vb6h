@@ -74,7 +74,7 @@ export const GET = authMiddleware(async (request: NextRequest) => {
     return NextResponse.json({ success: true, data })
   } catch (error) {
     console.error('[API] GET /api/lesson/transfer error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to load your transfer answer' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to load your transfer answer' }, { status: 500 })
   }
 })
 
@@ -100,6 +100,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         `<answer>\n${answer}\n</answer>`,
       ].filter(Boolean).join('\n\n'),
       jsonSchema: GRADE_SCHEMA,
+      purpose: `lesson/${exercise.kind}-grade`,
     }) as Record<string, unknown>
     const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : []
     if (typeof raw.verdict !== 'string' || !VERDICTS.includes(raw.verdict) || typeof raw.feedback !== 'string') throw new ClaudeCliError('Claude CLI returned an invalid grade', 502)
@@ -121,6 +122,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
   } catch (error) {
     if (error instanceof ClaudeCliError) return NextResponse.json({ success: false, error: error.message }, { status: error.status })
     console.error('[API] POST /api/lesson/transfer error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to grade this answer' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to grade this answer' }, { status: 500 })
   }
 })

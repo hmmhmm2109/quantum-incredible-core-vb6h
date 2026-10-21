@@ -55,6 +55,11 @@ function EmbedPathApp() {
   const [resumedSessionId, setResumedSessionId] = useState<string | null>(null)
   const [restarting, setRestarting] = useState(false)
   const abandonedRef = useRef<Set<string>>(new Set())
+  // Questions are written one ahead of the learner: a slot is generated only once the learner has reached the slot before it
+  // (or asked for it), so leaving an assessment early never pays for questions nobody opened. runRef retires parked workers of an older call.
+  const frontierRef = useRef<{ sessionId: string; slot: number }>({ sessionId: '', slot: 0 })
+  const runRef = useRef(0)
+  const reachSlot = (sessionId: string, slot: number) => { const f = frontierRef.current; frontierRef.current = { sessionId, slot: f.sessionId === sessionId ? Math.max(f.slot, slot) : slot } }
   // Items graded in this tab (saved.responses covers the ones graded earlier).
   const [gradedNow, setGradedNow] = useState<string[]>([])
   // Generated items are kept sorted by slot; the displayed question is tracked by slot so a late or retried question inserted before it never shifts the view.
@@ -118,12 +123,17 @@ function EmbedPathApp() {
       throw error
     }
   }
-  // Questions are written in the background (two at a time) while the learner answers; slots that still fail are kept in `missing` for a manual retry.
-  const generateSlots = async (sessionId: string, slots: number[]) => {
+  // Questions are written in the background, one ahead of the learner, while they answer; slots that still fail are kept in `missing` for a manual retry.
+  // `eager` (manual retry) skips the one-ahead wait because the learner already asked for those slots.
+  const generateSlots = async (sessionId: string, slots: number[], eager = false) => {
     const queue = [...slots]
+    const run = eager ? runRef.current : ++runRef.current
+    const retired = () => abandonedRef.current.has(sessionId) || (!eager && runRef.current !== run)
     const worker = async () => {
-      for (let next = queue.shift(); next !== undefined && !abandonedRef.current.has(sessionId); next = queue.shift()) {
+      for (let next = queue.shift(); next !== undefined && !retired(); next = queue.shift()) {
         const slot = next
+        while (!eager && !retired() && !(frontierRef.current.sessionId === sessionId && slot <= frontierRef.current.slot + 1)) await new Promise((resolve) => setTimeout(resolve, 500))
+        if (retired()) return
         let item: JsonRecord | undefined
         let reason = ''
         try { item = await generateSlot(sessionId, slot) } catch (error) { reason = error instanceof Error ? error.message : 'Unknown error.' }
@@ -142,7 +152,7 @@ function EmbedPathApp() {
     if (!generated || generated.pending > 0 || generated.missing.length === 0) return
     const slots = generated.missing.map((entry) => entry.slot)
     setGenerated({ ...generated, missing: [], pending: slots.length })
-    void generateSlots(generated.sessionId, slots)
+    void generateSlots(generated.sessionId, slots, true)
   }
   // An unfinished session for the same scope (one topic, or the mixed diagnostic) is resumed instead of starting another one.
   const findResumable = (sessions: JsonRecord[], responses: JsonRecord[], scope: { domainId: string; topicId: string } | null) => [...sessions]
@@ -167,6 +177,7 @@ function EmbedPathApp() {
     setResumedSessionId(sessionId)
     clearWorkspace()
     setCurrentSlot(itemSlot(open ?? items[items.length - 1]))
+    reachSlot(sessionId, itemSlot(open ?? items[items.length - 1]))
     setWaitingNext(!open && absent.length > 0)
     setView('assessment')
     toast.success(open ? `Resuming your assessment at question ${itemSlot(open) + 1} of ${plan.length}.` : 'Resuming your assessment. The next question is still being written.')
@@ -196,7 +207,8 @@ function EmbedPathApp() {
       setWaitingNext(false)
       clearWorkspace()
       setView('assessment')
-      toast.success(`Question 1 of ${total} is ready. The rest are being written.`, { id: toastId })
+      toast.success(`Question 1 of ${total} is ready. The next one is written while you answer.`, { id: toastId })
+      reachSlot(sessionId, 0)
       void generateSlots(sessionId, Array.from({ length: total - 1 }, (_, index) => index + 1))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Assessment could not be generated.', { id: toastId })
@@ -226,7 +238,7 @@ function EmbedPathApp() {
   }
   const openAssessment = () => startAssessment(null)
   const openTopicAssessment = (domainId: string, topicId: string) => startAssessment({ domainId, topicId })
-  const advanceAssessment = (item?: JsonRecord) => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); if (item) setCurrentSlot(itemSlot(item)) }
+  const advanceAssessment = (item?: JsonRecord) => { setAnswerText(''); setJustification(''); setConfidence(''); setSelectedAnswers([]); if (item) { setCurrentSlot(itemSlot(item)); if (generated) reachSlot(generated.sessionId, itemSlot(item)) } }
   const answeredIds = useMemo(() => new Set([...saved.responses.map((response) => stringValue(response.item_id)), ...gradedNow]), [saved.responses, gradedNow])
   const assessmentProgress = useMemo(() => buildAssessmentProgress(generated, currentSlot, answeredIds), [generated, currentSlot, answeredIds])
   // First slot after `slot` (then earlier ones) whose question has not been graded yet; slots without a question yet count as open.
@@ -241,6 +253,7 @@ function EmbedPathApp() {
   const openSlot = (gen: NonNullable<typeof generated>, slot: number) => {
     const item = gen.items.find((entry) => itemSlot(entry) === slot)
     if (item) { advanceAssessment(item); setView('assessment'); return }
+    reachSlot(gen.sessionId, slot)
     if (gen.pending > 0) toast.info(`Question ${slot + 1} is still being written. Try again in a moment.`)
     else { toast.info(`Question ${slot + 1} is missing; retrying it now.`); retryMissing() }
   }
@@ -257,6 +270,7 @@ function EmbedPathApp() {
     if (next === null || result.session_progress?.completed) { showReview(result); return }
     const item = generated.items.find((entry) => itemSlot(entry) === next)
     if (item) { advanceAssessment(item); return }
+    reachSlot(generated.sessionId, next)
     if (generated.pending > 0) { setWaitingNext(true); toast.info(`Question ${next + 1} is still being written. You will move on automatically.`); return }
     toast.error(`Question ${next + 1} is missing because it could not be generated. Use Retry above the question.`)
   }
@@ -267,13 +281,13 @@ function EmbedPathApp() {
     else if (next === null || generated.pending === 0) setWaitingNext(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waitingNext, generated, currentSlot])
-  const requestCoach = async (message: string, itemId?: string, target?: { url: string; body: unknown }) => {
+  const requestCoach = async (message: string, target?: { url: string; body: unknown }) => {
     setActiveAgentId(CLAUDE_RUNTIME)
     try {
       const response = await authFetch(target?.url ?? '/api/claude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(target?.body ?? { message, item_id: itemId }),
+        body: JSON.stringify(target?.body ?? { message }),
       })
       const result: unknown = await response.json()
       const resultRecord = recordValue(result)
@@ -315,11 +329,9 @@ function EmbedPathApp() {
   const gradeCurrent = async () => {
     const currentItem = generated ? generated.items[Math.min(assessmentIndex, generated.items.length - 1)] : undefined
     const itemId = stringValue(currentItem?.id) || undefined
-    if (generated && !itemId) { toast.error('This question has no saved id. Reload the page and resume the assessment.'); return null }
-    const result = itemId
-      ? await requestCoach('', undefined, { url: '/api/assessment/grade', body: { item_id: itemId, selected_answers: selectedAnswers.length > 0 ? selectedAnswers : [answerText], confidence, justification } })
-      : await requestCoach(`request_type: assessment_submission\nitem_id: ${itemId ?? 'none'}\nmode: ${assessmentMeta.mode}\nquestion_index: ${assessmentIndex + 1}\nquestion: ${assessmentQuestion.stem}\nselected_answers: ${selectedAnswers.join(' | ') || answerText}\nconfidence: ${confidence || 'not supplied'}\nwritten justification: ${justification}\nassessment metadata: ${JSON.stringify(assessmentMeta)}\nDo not reveal correctness during the active assessment. After submission, return the complete structured review with valid or excluded items, misconception analysis, bounded mastery impact, explanations, remediation, and the Claude CLI runtime state.`, itemId)
-    if (result && itemId) { setGradedNow((current) => [...current, itemId]); await refreshMastery() }
+    if (!itemId) { toast.error('This question has no saved id. Reload the page and resume the assessment.'); return null }
+    const result = await requestCoach('', { url: '/api/assessment/grade', body: { item_id: itemId, selected_answers: selectedAnswers.length > 0 ? selectedAnswers : [answerText], confidence, justification } })
+    if (result) { setGradedNow((current) => [...current, itemId]); await refreshMastery() }
     return result
   }
   const showReview = (result: ReviewData) => { setReview(result); setHints(result.hints); setClaudeState(fallbackClaudeFromReview(result)); setView('review'); if (generated && generated.missing.length > 0) toast.warning(`${generated.items.length} of ${generated.total} questions were generated; this assessment is incomplete.`) }
@@ -382,7 +394,7 @@ function EmbedPathApp() {
   const handleSampleData = (checked: boolean) => { setSampleData(checked); if (!checked) toast.success('Sample examples removed. Saved data remains visible.'); else toast.success('Sample examples restored.') }
   const renderView = () => {
     if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={openRecentPractice} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} domainOptions={DOMAIN_TOPIC_OPTIONS} onStartLearningTopic={startTopicLesson} onStartAssessmentTopic={openTopicAssessment} topicActionLoading={loading} />
-    if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentProgress={assessmentProgress} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => { if (generated) { const item = generated.items[Math.min(assessmentIndex + 1, generated.items.length - 1)]; if (item) setCurrentSlot(itemSlot(item)) } else setRawIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)) }} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
+    if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentProgress={assessmentProgress} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => { if (generated) { const item = generated.items[Math.min(assessmentIndex + 1, generated.items.length - 1)]; if (item) { setCurrentSlot(itemSlot(item)); reachSlot(generated.sessionId, itemSlot(item)) } } else setRawIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)) }} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentProgress={assessmentProgress} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} onRestartAssessment={resumedSessionId ? restartAssessment : undefined} restarting={restarting} currentAnswered={Boolean(generated && answeredIds.has(stringValue(generated.items[Math.min(assessmentIndex, generated.items.length - 1)]?.id)))} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
     if (view === 'review' && review) return <ResultSection data={review} onStartNext={startNextActivity} nextQuestion={nextQuestion} nextLabel={nextStep?.label ?? 'Choose a topic in Skill Map'} starting={practiceLoad?.status === 'loading'} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} onOpenLesson={startTopicLesson} onAskAbout={askAboutQuestion} loading={loading} statusMessage={statusMessage} />
     if (view === 'lesson' && lesson) {

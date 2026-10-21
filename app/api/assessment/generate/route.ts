@@ -106,14 +106,18 @@ const JUDGE_SCHEMA = {
 const JUDGE_PROMPT = `You check one multiple-choice question for coherence between its stem and its options.
 Answer coherent=false (and say what is wrong in "problem", one sentence) if any option is not a direct answer to the exact question the stem asks, if the stem compares named designs but the options do not all weigh those designs, or if the keyed option does not answer the question as asked. Otherwise coherent=true. Do not judge difficulty or style.`
 
-// Extra cheap call for comparison/tradeoff stems only. A failed judge call never blocks a question: the heuristics already passed.
-async function judgeCoherence(question: RawQuestion): Promise<string | null> {
+// Extra cheap call for comparison/tradeoff stems only. A failed judge call (busy, timeout, bad output) deliberately fails open,
+// because regenerating a question that already passed the heuristics costs more than it protects; the skip is recorded in
+// validation_evidence.judge so unchecked questions can be found later.
+type JudgeResult = { problem: string | null; skipped: boolean }
+async function judgeCoherence(question: RawQuestion): Promise<JudgeResult> {
   try {
     const keyed = [...new Set(question.correct_indexes)].map((index) => question.options[index])
-    const verdict = (await runClaudeJson({ systemPrompt: JUDGE_PROMPT, message: JSON.stringify({ stem: question.stem, artifact: question.artifact, options: question.options, keyed_options: keyed, explanation: question.explanation }), jsonSchema: JUDGE_SCHEMA, timeoutMs: 60_000 })) as { coherent?: boolean; problem?: string }
-    return verdict.coherent === false ? `judge: ${verdict.problem?.trim() || 'options do not answer the stem'}` : null
-  } catch {
-    return null
+    const verdict = (await runClaudeJson({ systemPrompt: JUDGE_PROMPT, message: JSON.stringify({ stem: question.stem, artifact: question.artifact, options: question.options, keyed_options: keyed, explanation: question.explanation }), jsonSchema: JUDGE_SCHEMA, timeoutMs: 60_000, purpose: 'assessment/judge' })) as { coherent?: boolean; problem?: string }
+    return { problem: verdict.coherent === false ? `judge: ${verdict.problem?.trim() || 'options do not answer the stem'}` : null, skipped: false }
+  } catch (error) {
+    console.warn('[assessment/generate] judge call failed, accepting the question unjudged:', error instanceof Error ? error.message : error)
+    return { problem: null, skipped: true }
   }
 }
 
@@ -130,12 +134,18 @@ async function generateItem(sessionId: string, slot: Slot) {
   // One server-side retry, only when the model's answer is missing or fails validate() / the judge; CLI errors (busy, timeout, exit) go back to the client's retry.
   let raw: RawQuestion | undefined
   let problem: string | null = null
+  let judge: 'not_needed' | 'passed' | 'skipped' = 'not_needed'
   for (let attempt = 0; !raw; attempt += 1) {
     const message = JSON.stringify(problem ? { ...request, rejected_previous_attempt: `${problem}. Fix this; the stem and the options must answer the same question.` } : request)
-    const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message, jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000 })
+    const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message, jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000, purpose: 'assessment/generate' })
     const candidate = (output as { questions?: RawQuestion[] }).questions?.[0]
     problem = candidate ? validate(candidate, slot) : 'question is missing'
-    if (candidate && !problem && needsJudge(candidate.stem)) problem = await judgeCoherence(candidate)
+    judge = 'not_needed'
+    if (candidate && !problem && needsJudge(candidate.stem)) {
+      const verdict = await judgeCoherence(candidate)
+      problem = verdict.problem
+      judge = verdict.skipped ? 'skipped' : 'passed'
+    }
     if (!problem) raw = candidate
     else if (attempt >= 1) throw new ClaudeCliError(`Generated question was rejected: ${problem}`, 502)
   }
@@ -152,7 +162,7 @@ async function generateItem(sessionId: string, slot: Slot) {
     blueprint_version: BLUEPRINT_VERSION,
     generated_question: { slot: slot.slot, stem: raw.stem.trim(), options, type: slot.type, artifact: raw.artifact?.trim() || null, domain_id: slot.domain_id, topic: slot.topic, topic_id: slot.topic_id ?? toTopicId(slot.topic) },
     difficulty_factors: { score: slot.difficulty, factors: raw.difficulty_factors ?? [] },
-    validation_evidence: { state: 'model_generated', answer_key_hidden: true },
+    validation_evidence: { state: 'model_generated', answer_key_hidden: true, judge },
     answer_rules: { type: slot.type, partial_credit: slot.type === 'multiple_answer' ? 'Partial credit for each correct selection, penalty for wrong ones.' : 'No partial credit for this item.' },
     // The answer key and the difficulty rationale never leave the server before submission: see stripAnswerKey() in lib/assessment-redact.ts.
     review_snapshot: { state: 'pending_submission', answer_key: { correct_options: correctOptions, explanation: raw.explanation, misconception: raw.misconception } },
@@ -234,6 +244,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
   } catch (error) {
     if (error instanceof ClaudeCliError) return NextResponse.json({ success: false, error: error.message }, { status: error.status })
     console.error('[API] POST /api/assessment/generate error:', error)
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unable to generate assessment' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Unable to generate assessment' }, { status: 500 })
   }
 })
