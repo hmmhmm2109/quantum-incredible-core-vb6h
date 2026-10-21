@@ -1,7 +1,7 @@
-import { authMiddleware, scopedRepo } from 'lyzr-architect-pg'
-import { eq } from 'lyzr-architect-pg/schema'
+import { authMiddleware, getCurrentUserId, getDb, scopedRepo } from 'lyzr-architect-pg'
+import { and, eq, sql } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
-import { assessment_items } from '@/lib/db/schema'
+import { assessment_items, assessment_responses, learning_events, topic_mastery } from '@/lib/db/schema'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -9,11 +9,15 @@ export const runtime = 'nodejs'
 // Grades one multiple-choice item on the server against the answer key stored when
 // Claude wrote the question, so submitting is instant and does not spend a Claude call.
 // The response has the same shape as the coach result that app/page.tsx already renders.
+// The result is also persisted here, in one transaction: the response row, the topic mastery
+// update (bounded by mastery_impact_cap) and a learning event. Grading is idempotent per item,
+// so a re-submit returns the stored result and never applies mastery twice.
 
 type AnswerKey = { correct_options?: string[]; explanation?: string; misconception?: string }
 
 const CONFIDENCE: Record<string, number> = { low: 0.3, medium: 0.6, high: 0.9 }
 const DOMAIN_LABEL: Record<string, string> = { c: 'C', cpp: 'C++', linux: 'Linux', networking: 'Networking', bsp: 'BSP' }
+const BANDS = ['Basic', 'Intermediate', 'Advanced']
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
 export const POST = authMiddleware(async (request: NextRequest) => {
@@ -95,9 +99,47 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       claude_cli: { available: true, status: 'completed', notice: 'Claude CLI wrote this question; grading ran instantly on the server against its stored answer key.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
     }
 
+    const ownerId = getCurrentUserId()
+    if (!ownerId) return NextResponse.json({ success: false, error: 'Not authenticated' }, { status: 401 })
+    const evidence = result.mastery_evidence[0]
+    const cap = result.assessment.mastery_impact_cap
+
+    const stored = await getDb().transaction(async (tx) => {
+      // Serialize concurrent submits of the same item so only one of them applies mastery.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`grade:${ownerId}:${item.id}`}))`)
+      const [existing] = await tx.select().from(assessment_responses).where(and(eq(assessment_responses.owner_user_id, ownerId), eq(assessment_responses.item_id, item.id))).limit(1)
+      if (existing) return { result: existing.feedback, replayed: true as const, selected_answers: existing.selected_answers }
+
+      const [current] = await tx.select().from(topic_mastery).where(and(eq(topic_mastery.owner_user_id, ownerId), eq(topic_mastery.domain_id, domainId), eq(topic_mastery.topic_id, topicId))).limit(1)
+      const before = Number(current?.score ?? 0)
+      const beforeConfidence = Number(current?.confidence ?? 0)
+      // Move toward the evidence score in proportion to its confidence, never more than the cap.
+      const scoreDelta = Math.max(-cap.max_score_delta, Math.min(cap.max_score_delta, Math.round((evidence.score - before) * evidence.confidence)))
+      const after = Math.max(0, Math.min(100, before + scoreDelta))
+      const confidenceDelta = Math.min(1 - beforeConfidence, Number((evidence.confidence * 0.25).toFixed(2)))
+      const bandFromScore = BANDS[after >= 70 ? 2 : after >= 40 ? 1 : 0]
+      const beforeBand = Math.max(0, BANDS.indexOf(current?.level_band ?? 'Basic'))
+      const newBand = BANDS[Math.max(beforeBand - cap.max_level_band_delta, Math.min(beforeBand + cap.max_level_band_delta, BANDS.indexOf(bandFromScore)))]
+      const previous = (current?.evidence_summary as { evidence?: unknown } | undefined)?.evidence
+      const summary = { state: 'assessed', evidence: [...(Array.isArray(previous) ? previous : []), ...evidence.evidence].slice(-5), recommended_focus: evidence.recommended_focus }
+
+      await tx.insert(assessment_responses).values({
+        item_id: item.id, session_id: item.session_id, selected_answers: chosen, justification, response_time_ms: 0,
+        partial_credit: String(result.assessment.score.earned), feedback: result, challenge_state: 'completed', mastery_evidence: result.mastery_evidence, owner_user_id: ownerId,
+      })
+      if (current) await tx.update(topic_mastery).set({ score: String(after), level_band: newBand, confidence: String(Math.max(0, Math.min(1, Number((beforeConfidence + confidenceDelta).toFixed(2))))), evidence_summary: summary }).where(eq(topic_mastery.id, current.id))
+      else await tx.insert(topic_mastery).values({ domain_id: domainId, topic_id: topicId, pack_version: item.blueprint_version, score: String(after), level_band: newBand, confidence: String(confidenceDelta), evidence_summary: summary, owner_user_id: ownerId })
+      await tx.insert(learning_events).values({
+        event_type: 'assessment', domain_id: domainId, topic_id: topicId, evidence: { item_id: item.id, earned: result.assessment.score.earned, mastery_evidence: result.mastery_evidence },
+        score_delta: String(after - before), confidence_delta: String(confidenceDelta), owner_user_id: ownerId,
+      })
+      return { result, replayed: false as const, selected_answers: chosen }
+    })
+
     return NextResponse.json({
       success: true,
-      response: { status: 'success', result, metadata: { agent_name: 'Assessment grader', timestamp: new Date().toISOString(), request_id: null } },
+      response: { status: 'success', result: stored.result, metadata: { agent_name: 'Assessment grader', timestamp: new Date().toISOString(), request_id: null } },
+      ...(stored.replayed && { replayed: true, selected_answers: stored.selected_answers }),
     })
   } catch (error) {
     console.error('[API] POST /api/assessment/grade error:', error)

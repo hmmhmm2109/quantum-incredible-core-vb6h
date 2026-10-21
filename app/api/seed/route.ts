@@ -7,13 +7,20 @@ import {
   recommendations,
   topic_mastery,
 } from '@/lib/db/schema'
+import { DOMAINS, topicLabel } from '@/lib/taxonomy'
+
+// Each domain starts on the first topic of its learning path.
+const firstTopic = (domainId: string) => DOMAINS.find((domain) => domain.id === domainId)!.topics[0].id
+
+// The seeded diagnostic prompt is about validating a packet header inside a buffer.
+const SEED_ACTIVITY_TOPIC = 'pointers-bounds'
 
 const domains = [
-  { domain_id: 'c', topic_id: 'pointers-and-bounds', score: '0', level_band: 'Basic', confidence: '0', focus: 'Start with a mixed diagnostic to establish pointer and bounds evidence.' },
-  { domain_id: 'cpp', topic_id: 'raii-and-lifetime', score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map ownership and object-lifetime fundamentals.' },
-  { domain_id: 'linux', topic_id: 'processes-and-signals', score: '0', level_band: 'Basic', confidence: '0', focus: 'Trace a safe process scenario and explain signal behavior.' },
-  { domain_id: 'networking', topic_id: 'packet-diagnosis', score: '0', level_band: 'Basic', confidence: '0', focus: 'Interpret a packet trace before choosing a troubleshooting path.' },
-  { domain_id: 'bsp', topic_id: 'device-tree', score: '0', level_band: 'Basic', confidence: '0', focus: 'Read a device-tree fragment and connect it to board bring-up.' },
+  { domain_id: 'c', topic_id: firstTopic('c'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Start with a mixed diagnostic to establish type and control-flow evidence.' },
+  { domain_id: 'cpp', topic_id: firstTopic('cpp'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map core-language fundamentals.' },
+  { domain_id: 'linux', topic_id: firstTopic('linux'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map shell and file-handling fundamentals.' },
+  { domain_id: 'networking', topic_id: firstTopic('networking'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map the TCP/IP layering model.' },
+  { domain_id: 'bsp', topic_id: firstTopic('bsp'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map cross-compilation and toolchain fundamentals.' },
 ]
 
 export const POST = authMiddleware(async () => {
@@ -45,7 +52,7 @@ export const POST = authMiddleware(async () => {
     if (!activity) {
       ;[activity] = await activityRepo.insert({
         domain_id: 'c',
-        topic_id: 'pointers-and-bounds',
+        topic_id: SEED_ACTIVITY_TOPIC,
         pack_version: 'v1.0.0',
         level: 'Basic',
         format: 'diagnostic',
@@ -60,7 +67,7 @@ export const POST = authMiddleware(async () => {
     if ((await recommendationRepo.count()) === 0 && activity?.id) {
       await recommendationRepo.insert({
         activity_id: activity.id,
-        activity_metadata: { domain: 'C', topic: 'Pointers & bounds', level_band: 'Basic', format: 'Mixed diagnostic', estimated_duration_minutes: 12 },
+        activity_metadata: { domain: 'C', topic: topicLabel('c', SEED_ACTIVITY_TOPIC), level_band: 'Basic', format: 'Mixed diagnostic', estimated_duration_minutes: 12 },
         rationale: 'A mixed diagnostic gives the coach evidence across all five domain packs before recommending practice.',
         status: 'queued',
       })

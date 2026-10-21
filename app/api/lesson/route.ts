@@ -5,6 +5,7 @@ import { ClaudeCliError, MODEL, runClaudeJson } from '@/lib/claude-cli'
 import { LECTURE_SCHEMA, PRACTICE_SCHEMA } from '@/lib/coach-schema'
 import { topic_lessons } from '@/lib/db/schema'
 import { DOMAIN_TOPIC_OPTIONS } from '@/lib/learning-topics'
+import { singleFlight } from '@/lib/single-flight'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -67,13 +68,19 @@ export const POST = authMiddleware(async (request: NextRequest) => {
 
     let content = cached?.content as Record<string, unknown> | undefined
     if (!content) {
-      const request_ = `Domain: ${domain.label} (${domain.id})\nTopic: ${topic.label} (${topic.id})\nselected_topic_only: true`
-      content = await runClaudeJson({
-        systemPrompt: part === 'lecture' ? LECTURE_PROMPT : PRACTICE_PROMPT,
-        message: request_,
-        jsonSchema: part === 'lecture' ? LECTURE_SCHEMA : PRACTICE_SCHEMA,
-      }) as Record<string, unknown>
-      await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind: part, content, model: MODEL }).onConflictDoNothing()
+      // Concurrent misses for the same lesson share one Claude call.
+      content = await singleFlight(`lesson:${domain.id}:${topic.id}:${part}`, async () => {
+        const request_ = `Domain: ${domain.label} (${domain.id})\nTopic: ${topic.label} (${topic.id})\nselected_topic_only: true`
+        const generated = await runClaudeJson({
+          systemPrompt: part === 'lecture' ? LECTURE_PROMPT : PRACTICE_PROMPT,
+          message: request_,
+          jsonSchema: part === 'lecture' ? LECTURE_SCHEMA : PRACTICE_SCHEMA,
+        }) as Record<string, unknown>
+        await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind: part, content: generated, model: MODEL }).onConflictDoNothing()
+        // Return the persisted row (another process may have won the insert) so every caller sees the same content.
+        const [stored] = await db.select().from(topic_lessons).where(where).limit(1)
+        return (stored?.content as Record<string, unknown> | undefined) ?? generated
+      })
     }
 
     const result = assemble(domain.id, topic.id, domain.label, topic.label, content as Parameters<typeof assemble>[4])

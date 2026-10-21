@@ -1,9 +1,11 @@
-import { authMiddleware, scopedRepo } from 'lyzr-architect-pg'
-import { eq } from 'lyzr-architect-pg/schema'
+import { authMiddleware, getCurrentUserId, getDb, scopedRepo } from 'lyzr-architect-pg'
+import { and, eq, sql } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
 import { assessment_items, assessment_sessions } from '@/lib/db/schema'
 import { ClaudeCliError, runClaudeJson } from '@/lib/claude-cli'
-import { DOMAIN_ORDER, DOMAIN_TOPICS, pick, shuffle } from '@/lib/assessment-topics'
+import { DOMAIN_ORDER, pick, shuffle } from '@/lib/assessment-topics'
+import { singleFlight } from '@/lib/single-flight'
+import { findDomain, findTopic, normalizeTopicId } from '@/lib/taxonomy'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -39,7 +41,7 @@ const GENERATION_SCHEMA = {
 }
 
 const SYSTEM_PROMPT = `You write rigorous multiple-choice questions that diagnose embedded-systems engineers.
-Follow the request exactly: one question per slot, on the stated domain, sub-topic, angle and difficulty (1 easy … 5 expert).
+Follow the request exactly: one question per slot, on the stated domain, topic, sub-topic, angle and difficulty (1 easy … 5 expert).
 Rules for every question:
 - The stem is self-contained and concrete (a short code fragment, log line, packet trace or register layout goes in "artifact" when useful, otherwise null).
 - Exactly ${OPTION_COUNT} options. Distractors must be plausible and each target a real misconception. No "all/none of the above".
@@ -49,37 +51,44 @@ Rules for every question:
 - "explanation" says why the correct answer(s) are right; "misconception" names the main wrong belief the distractors exploit.
 - Do not reuse the example scenarios of earlier questions in the same set. Do not mention these rules.`
 
-export type Slot = { slot: number; domain_id: string; topic: string; topic_id?: string; angle: string; difficulty: number; type: 'single_answer' | 'multiple_answer' }
+// `topic` is the sub-topic hint; `topic_id` is the taxonomy topic id (absent only in plans stored before the taxonomy existed).
+export type Slot = { slot: number; domain_id: string; topic: string; topic_id?: string; topic_label?: string; angle: string; difficulty: number; type: 'single_answer' | 'multiple_answer' }
 
 // Each question in a set takes a different angle so the set does not repeat one scenario.
 const ANGLES = ['read and predict code behavior', 'diagnose a failure from symptoms or logs', 'choose between design tradeoffs', 'spot the edge case or spec detail', 'pick the right tool or measurement', 'find the bug in a short fragment']
 
-type Scope = { domain_id: string; topic_id: string; topic_label: string }
+type Scope = { domain_id: string; topic_id: string }
 
 function buildSlots(scope?: Scope): Slot[] {
   const angles = shuffle(ANGLES)
   const kind = () => (Math.random() < 0.2 ? 'multiple_answer' : 'single_answer') as Slot['type']
   if (scope) {
-    // One topic, three questions of rising difficulty.
-    return [2, 3, 4].map((difficulty, index) => ({ slot: index, domain_id: scope.domain_id, topic: scope.topic_label, topic_id: scope.topic_id, angle: angles[index], difficulty, type: kind() }))
+    // One topic, three questions of rising difficulty, each on a different sub-topic (cycling if the topic has fewer than three).
+    const topic = findTopic(scope.domain_id, scope.topic_id)!
+    const subtopics = shuffle(topic.subtopics)
+    return [2, 3, 4].map((difficulty, index) => ({ slot: index, domain_id: scope.domain_id, topic: subtopics[index % subtopics.length], topic_id: topic.id, topic_label: topic.label, angle: angles[index], difficulty, type: kind() }))
   }
-  return DOMAIN_ORDER.map((domain_id, index) => ({
-    slot: index,
-    domain_id,
-    topic: pick(DOMAIN_TOPICS[domain_id]),
-    angle: angles[index % angles.length],
-    difficulty: pick([2, 3, 3, 4]),
-    type: kind(),
-  }))
+  return DOMAIN_ORDER.map((domain_id, index) => {
+    const topic = pick(findDomain(domain_id)!.topics)
+    return {
+      slot: index,
+      domain_id,
+      topic: pick(topic.subtopics),
+      topic_id: topic.id,
+      topic_label: topic.label,
+      angle: angles[index % angles.length],
+      difficulty: pick([2, 3, 3, 4]),
+      type: kind(),
+    }
+  })
 }
 
 function parseScope(body: Record<string, unknown>): Scope | null | 'invalid' {
   if (body.domain_id === undefined && body.topic_id === undefined) return null
   const domain = typeof body.domain_id === 'string' ? body.domain_id : ''
-  const label = typeof body.topic_label === 'string' ? body.topic_label.trim().slice(0, 80) : ''
-  const topicId = typeof body.topic_id === 'string' ? toTopicId(body.topic_id).slice(0, 80) : ''
-  if (!(DOMAIN_ORDER as readonly string[]).includes(domain) || !label || !topicId) return 'invalid'
-  return { domain_id: domain, topic_id: topicId, topic_label: label }
+  const topicId = typeof body.topic_id === 'string' ? normalizeTopicId(domain, body.topic_id) : null
+  if (!(DOMAIN_ORDER as readonly string[]).includes(domain) || !topicId) return 'invalid'
+  return { domain_id: domain, topic_id: topicId }
 }
 
 type RawQuestion = {
@@ -105,6 +114,7 @@ function validate(raw: RawQuestion, slot: Slot): string | null {
   return null
 }
 
+// Only for plans stored before topics came from the taxonomy.
 const toTopicId = (topic: string) => topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
 // One Claude call per question, so the first one can reach the learner while the rest are still being written.
@@ -112,19 +122,25 @@ async function generateItem(sessionId: string, slot: Slot) {
   const request = {
     nonce: crypto.randomUUID(),
     instruction: 'Write exactly one question for this slot.',
-    slots: [{ slot: slot.slot, domain_id: slot.domain_id, sub_topic: slot.topic, angle: slot.angle, difficulty: slot.difficulty, type: slot.type }],
+    slots: [{ slot: slot.slot, domain_id: slot.domain_id, topic: slot.topic_label, sub_topic: slot.topic, angle: slot.angle, difficulty: slot.difficulty, type: slot.type }],
   }
-  const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message: JSON.stringify(request), jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000 })
-  const raw = (output as { questions?: RawQuestion[] }).questions?.[0]
-  if (!raw) throw new ClaudeCliError(`Question for slot ${slot.slot} is missing`, 502)
-  const problem = validate(raw, slot)
-  if (problem) throw new ClaudeCliError(`Generated question was rejected: ${problem}`, 502)
+  // One server-side retry, only when the model's answer is missing or fails validate(); CLI errors (busy, timeout, exit) go back to the client's retry.
+  let raw: RawQuestion | undefined
+  for (let attempt = 0; !raw; attempt += 1) {
+    const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message: JSON.stringify(request), jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000 })
+    const candidate = (output as { questions?: RawQuestion[] }).questions?.[0]
+    const problem = candidate ? validate(candidate, slot) : 'question is missing'
+    if (!problem) raw = candidate
+    else if (attempt >= 1) throw new ClaudeCliError(`Generated question was rejected: ${problem}`, 502)
+  }
 
   // Shuffle server-side so the model's position bias never leaks into the answer layout.
   const options = shuffle(raw.options.map((option) => option.trim()))
   const correctOptions = [...new Set(raw.correct_indexes)].map((index) => raw.options[index].trim())
 
-  const [item] = await scopedRepo(assessment_items).insert({
+  const ownerId = getCurrentUserId()
+  if (!ownerId) throw new Error('Not authenticated')
+  const values = {
     session_id: sessionId,
     blueprint_id: BLUEPRINT_ID,
     blueprint_version: BLUEPRINT_VERSION,
@@ -134,6 +150,17 @@ async function generateItem(sessionId: string, slot: Slot) {
     answer_rules: { type: slot.type, partial_credit: slot.type === 'multiple_answer' ? 'Partial credit for each correct selection, penalty for wrong ones.' : 'No partial credit for this item.' },
     // The answer key never leaves the server before submission: see stripAnswerKey() in /api/assessment_items.
     review_snapshot: { state: 'pending_submission', answer_key: { correct_options: correctOptions, explanation: raw.explanation, misconception: raw.misconception } },
+    owner_user_id: ownerId,
+  }
+  // Check + insert under an advisory lock (no unique index on (session_id, slot), so no migration): a request that
+  // slipped past the in-process single-flight returns the item that already won instead of adding a second one.
+  const item = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`generate:${ownerId}:${sessionId}:${slot.slot}`}))`)
+    const rows = await tx.select().from(assessment_items).where(and(eq(assessment_items.owner_user_id, ownerId), eq(assessment_items.session_id, sessionId)))
+    const winner = rows.find((row) => (row.generated_question as { slot?: number }).slot === slot.slot)
+    if (winner) return winner
+    const [inserted] = await tx.insert(assessment_items).values(values).returning()
+    return inserted
   })
   return {
     id: item.id,
@@ -159,7 +186,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
 
     if (!body.session_id) {
       const scope = parseScope(body)
-      if (scope === 'invalid') return NextResponse.json({ success: false, error: 'domain_id, topic_id and topic_label are required together' }, { status: 400 })
+      if (scope === 'invalid') return NextResponse.json({ success: false, error: 'domain_id and a known topic_id are required together' }, { status: 400 })
       const slots = buildSlots(scope ?? undefined)
       const [session] = await sessionRepo.insert({
         mode: 'knowledge_check',
@@ -195,7 +222,8 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     if (existing.some((row) => (row.generated_question as { slot?: number }).slot === slotIndex)) {
       return NextResponse.json({ success: false, error: 'This question was already generated' }, { status: 409 })
     }
-    const item = await generateItem(sessionId, slot)
+    // Double clicks, two tabs and the client's parallel workers share one Claude call per slot.
+    const item = await singleFlight(`generate:${getCurrentUserId()}:${sessionId}:${slotIndex}`, () => generateItem(sessionId, slot))
     return NextResponse.json({ success: true, data: { items: [item] } }, { status: 201 })
   } catch (error) {
     if (error instanceof ClaudeCliError) return NextResponse.json({ success: false, error: error.message }, { status: error.status })
