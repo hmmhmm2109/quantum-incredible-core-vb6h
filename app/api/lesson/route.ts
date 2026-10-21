@@ -23,6 +23,9 @@ export const runtime = 'nodejs'
 // `next: true` (practice only) writes exercise n+1 (kind `practice:<n+1>`), harder, not repeating earlier ones and aimed at the learner's recent misses; if the newest exercise has no completed attempt from this learner yet it is returned as is (no Claude call).
 // `regenerate: true` (lecture only) deletes every cached row of the topic (lecture, variants incl. adapted, every practice exercise), writes a new lecture and re-opens the learner's gaps (their Q&A history is kept).
 
+// A full lecture took ~110s in practice, so the 120s default left almost no margin.
+const LECTURE_TIMEOUT_MS = 240_000
+
 const LECTURE_PROMPT = `You are the Embedded Systems Learning Coach for EmbedPath. Write a lesson-first explanation of ONE topic for an engineer new to it.
 Order: (1) theory explanation, (2) a guided worked example with concrete code, commands or a trace, (3) common pitfalls, then a retrieval check and a transfer exercise prompt (prompts only, do not give answers away).
 Write 4 sections, each roughly 150-250 words, examples short.
@@ -136,7 +139,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       `Previous topic in the course: ${previous?.label ?? 'none (this is the first topic)'}`,
       'selected_topic_only: true',
     ].join('\n')
-    const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA, purpose: 'lesson/lecture' }) as Record<string, unknown>
+    const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/lecture' }) as Record<string, unknown>
 
     let result: { content: Record<string, unknown>; cached: boolean }
     let exercise = 1
@@ -176,7 +179,7 @@ ${JSON.stringify(base.content)}
 
 <learner_gaps>
 ${JSON.stringify(gapList)}
-</learner_gaps>`, jsonSchema: LECTURE_SCHEMA, purpose: 'lesson/adapt' }) as Record<string, unknown>
+</learner_gaps>`, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/adapt' }) as Record<string, unknown>
           await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind, content: generated, model: MODEL }).onConflictDoUpdate({ target: [topic_lessons.domain_id, topic_lessons.topic_id, topic_lessons.kind], set: { content: generated, model: MODEL, updated_at: new Date() } })
           await db.update(learning_events).set({ evidence: sql`${learning_events.evidence} || ${JSON.stringify({ resolved: true, resolved_at: new Date().toISOString() })}::jsonb` }).where(inArray(learning_events.id, gaps.map((row) => row.id)))
           return generated
@@ -186,7 +189,7 @@ ${JSON.stringify(gapList)}
     } else if (action) {
       result = await getOrCreate(kind, async () => {
         const base = await getOrCreate('lecture', generateLecture)
-        return await runClaudeJson({ systemPrompt: `${LECTURE_PROMPT}\nYou are producing a VARIANT of an existing lesson. ${LECTURE_ACTIONS[action]}`, message: `${topicRequest}\n\nExisting lesson (JSON):\n${JSON.stringify(base.content)}`, jsonSchema: LECTURE_SCHEMA, purpose: 'lesson/variant' }) as Record<string, unknown>
+        return await runClaudeJson({ systemPrompt: `${LECTURE_PROMPT}\nYou are producing a VARIANT of an existing lesson. ${LECTURE_ACTIONS[action]}`, message: `${topicRequest}\n\nExisting lesson (JSON):\n${JSON.stringify(base.content)}`, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/variant' }) as Record<string, unknown>
       })
     } else {
       if (part === 'practice') {
