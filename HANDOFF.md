@@ -99,3 +99,5 @@ No automated tests. Previous verification used a throwaway local Postgres and he
 - Ask -> Update lesson (adapt) flow.
 - Transfer and retrieval submit.
 - Layout at 390px width.
+
+- Domain level (Home cards, Skill Map headers, overall) is the whole-domain mean over every taxonomy topic, unassessed = 0 (`lib/domain-score.ts`); it replaced the earlier best-topic rule. "Recommended next" targets the weakest domain by that score. Check: `npx tsx scripts/check-domain-score.ts`.
