@@ -15,7 +15,7 @@ import { SSOGuard } from '@/components/SSOGuard'
 // the whole body participate in the same cascade — including elements with
 // no explicit font class, which previously got Inter via the high-specificity
 // hashed className and couldn't be overridden by a `--font-sans` override.
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
+const inter = Inter({ subsets: ['latin', 'vietnamese'], variable: '--font-inter' })
 
 export const metadata: Metadata = {
   title: 'Next.js App',
