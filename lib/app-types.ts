@@ -2,7 +2,7 @@
 
 export const CLAUDE_RUNTIME = 'claude-cli-oauth'
 
-export type ViewName = 'home' | 'practice' | 'assessment' | 'review' | 'lesson' | 'skill-map' | 'history' | 'profile'
+export type ViewName = 'home' | 'practice' | 'assessment' | 'review' | 'lesson' | 'skill-map' | 'assess-setup' | 'history' | 'profile'
 export type JsonRecord = Record<string, unknown>
 
 export type SavedState = {
@@ -30,4 +30,4 @@ export type ClaudeState = {
 export type LessonState = { domainId: string; topicId: string; status: 'loading' | 'ready' | 'error'; error: string | null; variant: string | null; practice: 'idle' | 'loading' | 'ready' | 'error'; busy: boolean }
 export const LESSON_VARIANTS: Record<string, string> = { shorter: 'Shorter version', 'another-example': 'Another example', prerequisites: 'Prerequisites refresher', adapt: 'Enriched with your questions' }
 
-export type GeneratedAssessment = { sessionId: string; total: number; items: JsonRecord[]; coverage: { domain_id: string; topic_id: string; weight: number; subtopic?: string }[]; pending: number; missing: { slot: number; reason: string }[] }
+export type GeneratedAssessment = { sessionId: string; mode?: string; total: number; items: JsonRecord[]; coverage: { domain_id: string; topic_id: string; weight: number; subtopic?: string }[]; pending: number; missing: { slot: number; reason: string }[] }

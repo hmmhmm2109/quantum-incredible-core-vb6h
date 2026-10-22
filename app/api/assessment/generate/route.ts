@@ -1,7 +1,7 @@
 import { authMiddleware, getCurrentUserId, getDb, scopedRepo } from 'lyzr-architect-pg'
-import { and, eq, sql } from 'lyzr-architect-pg/schema'
+import { and, desc, eq, sql } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
-import { assessment_items, assessment_sessions } from '@/lib/db/schema'
+import { assessment_items, assessment_responses, assessment_sessions, topic_mastery } from '@/lib/db/schema'
 import { ClaudeCliError, runClaudeJson } from '@/lib/claude-cli'
 import { DOMAIN_ORDER, pick, shuffle } from '@/lib/assessment-topics'
 import { needsJudge, OPTION_COUNT, softFlags, validate, type RawQuestion } from '@/lib/assessment-validate'
@@ -9,6 +9,8 @@ import { judgeQuestion, type JudgeVerdict } from '@/lib/assessment-judge'
 import { stripAnswerKey } from '@/lib/assessment-redact'
 import { singleFlight } from '@/lib/single-flight'
 import { findDomain, findTopic, normalizeTopicId } from '@/lib/taxonomy'
+import { ANGLES, buildCustomPlan, parseSelection, type Slot } from '@/lib/assessment-plan'
+import { deriveSelection, RETAKE_MODE, topicsOf } from '@/lib/assessment-history'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -61,11 +63,7 @@ Rules for every question:
 - "difficulty_factors" is at most 2 short bullets naming the concepts or skills the question tests, in generic terms (e.g. "integer range vs. container size"). Never state, hint at or paraphrase the correct option or the explanation; it is shown to the learner only after they answer.
 - Do not reuse the example scenarios of earlier questions in the same set. Do not mention these rules.`
 
-// `topic` is the sub-topic hint; `topic_id` is the taxonomy topic id (absent only in plans stored before the taxonomy existed).
-export type Slot = { slot: number; domain_id: string; topic: string; topic_id?: string; topic_label?: string; angle: string; difficulty: number; type: 'single_answer' | 'multiple_answer' }
-
-// Each question in a set takes a different angle so the set does not repeat one scenario.
-const ANGLES = ['read and predict code behavior', 'diagnose a failure from symptoms or logs', 'choose between design tradeoffs', 'spot the edge case or spec detail', 'pick the right tool or measurement', 'find the bug in a short fragment']
+export type { Slot }
 
 type Scope = { domain_id: string; topic_id: string }
 
@@ -105,10 +103,25 @@ function parseScope(body: Record<string, unknown>): Scope | null | 'invalid' {
 const toTopicId = (topic: string) => topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
 // One Claude call per question, so the first one can reach the learner while the rest are still being written.
-async function generateItem(sessionId: string, slot: Slot) {
+// Stems of the learner's most recent questions on this topic (any session, including the current one), so a fresh set does not repeat them.
+async function recentStems(ownerId: string, slot: Slot, extra: string[] = []): Promise<string[]> {
+  const topicId = slot.topic_id ?? toTopicId(slot.topic)
+  const rows = await getDb().select({ question: assessment_items.generated_question }).from(assessment_items)
+    .where(and(eq(assessment_items.owner_user_id, ownerId), sql`${assessment_items.generated_question}->>'topic_id' = ${topicId}`, sql`coalesce(${assessment_items.validation_evidence}->>'retake_copy', '') <> 'true'`))
+    .orderBy(desc(assessment_items.created_at)).limit(10)
+  const stems = [...extra, ...rows.map((row) => String((row.question as { stem?: string }).stem ?? ''))].map((stem) => stem.replace(/\s+/g, ' ').trim().slice(0, 180)).filter(Boolean)
+  return [...new Set(stems)].slice(0, 10)
+}
+
+// `replaceId`: the unanswered item this call swaps out of the same slot (inserted and deleted in one transaction, so a failed generation leaves the old question in place).
+async function generateItem(sessionId: string, slot: Slot, opts: { avoid?: string[]; replaceId?: string } = {}) {
+  const avoid = opts.avoid ?? []
+  const ownerForStems = getCurrentUserId()
+  const earlier = ownerForStems ? await recentStems(ownerForStems, slot, avoid).catch(() => avoid) : avoid
   const request = {
     nonce: crypto.randomUUID(),
     instruction: 'Write exactly one question for this slot.',
+    ...(earlier.length > 0 && { do_not_repeat: { note: 'Earlier questions on this topic. Write a different scenario, code fragment and angle; do not repeat or paraphrase these.', stems: earlier } }),
     slots: [{ slot: slot.slot, domain_id: slot.domain_id, topic: slot.topic_label, sub_topic: slot.topic, angle: slot.angle, difficulty: slot.difficulty, type: slot.type }],
   }
   // One server-side retry, only when the model's answer is missing or fails validate() / the judge; CLI errors (busy, timeout, exit) go back to the client's retry.
@@ -161,7 +174,12 @@ async function generateItem(sessionId: string, slot: Slot) {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`generate:${ownerId}:${sessionId}:${slot.slot}`}))`)
     const rows = await tx.select().from(assessment_items).where(and(eq(assessment_items.owner_user_id, ownerId), eq(assessment_items.session_id, sessionId)))
     const winner = rows.find((row) => (row.generated_question as { slot?: number }).slot === slot.slot)
-    if (winner) return winner
+    if (winner && winner.id !== opts.replaceId) return winner
+    if (winner) {
+      const [answered] = await tx.select({ n: sql<number>`count(*)::int` }).from(assessment_responses).where(and(eq(assessment_responses.owner_user_id, ownerId), eq(assessment_responses.item_id, winner.id)))
+      if (Number(answered?.n ?? 0) > 0) return winner // answered meanwhile: keep it
+      await tx.delete(assessment_items).where(and(eq(assessment_items.owner_user_id, ownerId), eq(assessment_items.id, winner.id)))
+    }
     const [inserted] = await tx.insert(assessment_items).values(values).returning()
     return inserted
   })
@@ -179,22 +197,72 @@ async function generateItem(sessionId: string, slot: Slot) {
 
 /**
  * POST /api/assessment/generate
- *  - no body            → start: plans 5 random slots, creates the session, returns it with question 1.
- *  - { session_id, slot } → writes the question for one more slot of that session.
+ *  - no body            → start: plans one random topic per domain, creates the session, returns it with question 1.
+ *  - { domain_id, topic_id } → start: one topic, three questions.
+ *  - { topics: [{domain_id, topic_id}], question_count?, mode? } → start a custom assessment (400 on unknown ids).
+ *  - { retake_session_id } → "Retry the same questions": copies the items of one of the learner's own sessions into a new session (mode 'review_retake', new ids, options reshuffled, no Claude call). It is graded but never moves mastery.
+ *  - { session_id, slot } → writes the question for one more slot of that session; with replace: true swaps an unanswered question for a new one on the same topic.
  */
 export const POST = authMiddleware(async (request: NextRequest) => {
   try {
     const body = await request.json().catch(() => ({}))
     const sessionRepo = scopedRepo(assessment_sessions)
 
+    if (!body.session_id && body.retake_session_id !== undefined) {
+      const ownerId = getCurrentUserId()
+      if (!ownerId) return NextResponse.json({ success: false, error: 'Not authenticated' }, { status: 401 })
+      const source = typeof body.retake_session_id === 'string' ? await sessionRepo.findOne(eq(assessment_sessions.id, body.retake_session_id)) : null // owner-scoped: another learner's id is a 404
+      if (!source) return NextResponse.json({ success: false, error: 'Assessment session not found' }, { status: 404 })
+      const sourceItems = (await scopedRepo(assessment_items).findMany({ where: eq(assessment_items.session_id, source.id) }))
+        .sort((a, b) => Number((a.generated_question as { slot?: number }).slot ?? 0) - Number((b.generated_question as { slot?: number }).slot ?? 0))
+      if (sourceItems.length === 0) return NextResponse.json({ success: false, error: 'This assessment has no saved questions to retry' }, { status: 409 })
+      const policy = source.timing_policy as { plan?: Slot[]; retake_of?: string }
+      const plan: Slot[] = sourceItems.map((item, index) => ({ ...(policy.plan?.find((entry) => entry.slot === Number((item.generated_question as { slot?: number }).slot)) ?? {} as Slot), slot: index }))
+      const topics = topicsOf(source.topic_coverage)
+      const created = await getDb().transaction(async (tx) => {
+        const [session] = await tx.insert(assessment_sessions).values({
+          mode: RETAKE_MODE,
+          topic_coverage: plan.map((slot) => ({ domain_id: slot.domain_id, topic_id: slot.topic_id, subtopic: slot.topic, weight: 1 })),
+          timing_policy: { timed: false, question_count: plan.length, reveal_correctness_during_test: false, plan, selection: 'retake', retake_of: policy.retake_of ?? source.id, base_selection: deriveSelection(source.mode, source.timing_policy, topics) },
+          score: '0', confidence: '0', mastery_impact: { max_level_band_delta: 0, max_score_delta: 0, state: 'review_only' }, status: 'in_progress', owner_user_id: ownerId,
+        }).returning()
+        const copies: unknown[] = []
+        for (const [index, item] of sourceItems.entries()) {
+          const question = item.generated_question as { options?: string[] }
+          const [copy] = await tx.insert(assessment_items).values({
+            session_id: session.id, blueprint_id: item.blueprint_id, blueprint_version: item.blueprint_version,
+            generated_question: { ...question, slot: index, options: shuffle([...(question.options ?? [])]) }, // new order: remembering the position is not remembering the answer
+            difficulty_factors: item.difficulty_factors, validation_evidence: { ...(item.validation_evidence as object), retake_copy: true }, answer_rules: item.answer_rules,
+            review_snapshot: item.review_snapshot, owner_user_id: ownerId,
+          }).returning()
+          copies.push(stripAnswerKey(copy))
+        }
+        return { session, copies }
+      })
+      return NextResponse.json({ success: true, data: { session: { id: created.session.id, mode: created.session.mode, topic_coverage: created.session.topic_coverage, total: plan.length }, items: created.copies } }, { status: 201 })
+    }
+
     if (!body.session_id) {
       const scope = parseScope(body)
       if (scope === 'invalid') return NextResponse.json({ success: false, error: 'domain_id and a known topic_id are required together' }, { status: 400 })
-      const slots = buildSlots(scope ?? undefined)
+      // Custom selection: {topics: [{domain_id, topic_id}], question_count?, mode?}. Without `topics` the old plans apply (one topic x3, or the mixed diagnostic).
+      let slots: Slot[]
+      let mode = 'knowledge_check'
+      if (body.topics !== undefined) {
+        const selection = parseSelection(body)
+        if (!selection.ok) return NextResponse.json({ success: false, error: selection.error }, { status: 400 })
+        const ownerId = getCurrentUserId()
+        if (!ownerId) return NextResponse.json({ success: false, error: 'Not authenticated' }, { status: 401 })
+        const rows = await getDb().select().from(topic_mastery).where(eq(topic_mastery.owner_user_id, ownerId))
+        const scores: Record<string, number> = {}
+        for (const row of rows) if ((row.evidence_summary as { state?: string } | null)?.state === 'assessed') scores[`${row.domain_id}/${row.topic_id}`] = Number(row.score)
+        slots = buildCustomPlan(selection.topics, selection.count, scores)
+        mode = selection.mode
+      } else slots = buildSlots(scope ?? undefined)
       const [session] = await sessionRepo.insert({
-        mode: 'knowledge_check',
+        mode,
         topic_coverage: slots.map((slot) => ({ domain_id: slot.domain_id, topic_id: slot.topic_id ?? toTopicId(slot.topic), subtopic: slot.topic, weight: 1 })),
-        timing_policy: { timed: false, question_count: slots.length, reveal_correctness_during_test: false, plan: slots },
+        timing_policy: { timed: false, question_count: slots.length, reveal_correctness_during_test: false, plan: slots, ...(body.topics !== undefined && { selection: 'custom' }) },
         score: '0',
         confidence: '0',
         mastery_impact: { max_level_band_delta: 1, max_score_delta: 8, state: 'pending_submission' },
@@ -222,7 +290,16 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     if (!session || !slot) return NextResponse.json({ success: false, error: 'Assessment session or slot not found' }, { status: 404 })
 
     const existing = await scopedRepo(assessment_items).findMany({ where: eq(assessment_items.session_id, sessionId) })
-    if (existing.some((row) => (row.generated_question as { slot?: number }).slot === slotIndex)) {
+    const current = existing.find((row) => (row.generated_question as { slot?: number }).slot === slotIndex)
+    if (current && body.replace === true) {
+      // "Replace this question": a new question for the same unanswered slot and topic.
+      const answered = await scopedRepo(assessment_responses).findMany({ where: eq(assessment_responses.item_id, current.id) })
+      if (answered.length > 0) return NextResponse.json({ success: false, error: 'This question was already answered' }, { status: 409 })
+      const stem = String((current.generated_question as { stem?: string }).stem ?? '')
+      const replacement = await singleFlight(`replace:${getCurrentUserId()}:${current.id}`, () => generateItem(sessionId, slot, { avoid: [stem], replaceId: current.id }))
+      return NextResponse.json({ success: true, data: { items: [replacement] } }, { status: 201 })
+    }
+    if (current) {
       return NextResponse.json({ success: false, error: 'This question was already generated' }, { status: 409 })
     }
     // Double clicks, two tabs and the client's parallel workers share one Claude call per slot.
