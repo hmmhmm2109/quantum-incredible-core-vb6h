@@ -8,10 +8,14 @@ export type AiProviderId = 'claude' | 'copilot'
 export const AI_PROVIDER_LABELS: Record<AiProviderId, string> = { claude: 'Claude CLI', copilot: 'Copilot CLI' }
 
 let current: AiProviderId = 'claude'
+let currentModel = ''
 const listeners = new Set<() => void>()
-export function publishAiProvider(provider: AiProviderId) {
-  if (provider === current) return
+/** `model` = effective model id of the active provider ('' when it uses the CLI's own default); omit to keep the last one. */
+export function publishAiProvider(provider: AiProviderId, model?: string | null) {
+  const nextModel = model === undefined ? currentModel : model ?? ''
+  if (provider === current && nextModel === currentModel) return
   current = provider
+  currentModel = nextModel
   listeners.forEach((listener) => listener())
 }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
@@ -19,8 +23,9 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 /** Display name of the active provider ("Claude CLI" / "Copilot CLI") and its short form ("Claude" / "Copilot"). */
 export function useAiProvider() {
   const provider = useSyncExternalStore(subscribe, () => current, () => 'claude' as AiProviderId)
+  const model = useSyncExternalStore(subscribe, () => currentModel, () => '')
   const label = AI_PROVIDER_LABELS[provider]
-  return { provider, label, short: label.replace(' CLI', '') }
+  return { provider, model, label, short: label.replace(' CLI', '') }
 }
 
 /** Call once near the root: fetches the saved provider after login. */
@@ -30,7 +35,8 @@ export function useLoadAiProvider(authFetch: (url: string, init?: RequestInit) =
     let cancelled = false
     authFetch('/api/settings/ai').then((response) => response.json()).then((payload) => {
       const value = payload?.data?.provider
-      if (!cancelled && (value === 'claude' || value === 'copilot')) publishAiProvider(value)
+      const model = payload?.data?.effective?.[value]?.id
+      if (!cancelled && (value === 'claude' || value === 'copilot')) publishAiProvider(value, typeof model === 'string' ? model : null)
     }).catch(() => {})
     return () => { cancelled = true }
   }, [authFetch, enabled])

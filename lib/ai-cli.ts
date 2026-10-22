@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { getCurrentUserId } from 'lyzr-architect-pg'
 import { rateLimit } from '@/lib/rate-limit'
 import { validateJsonSchema } from '@/lib/json-schema-lite'
-import { copilotBin, getAiSettings, otherProvider, type AiProvider, type AiSettings } from '@/lib/ai-settings'
+import { CLAUDE_DEFAULT_MODEL, copilotBin, getAiSettings, isValidModelId, labelForModel, otherProvider, resolveModel, type AiProvider, type AiSettings } from '@/lib/ai-settings'
 
 // One entry point for every AI call: `runClaudeJson` picks the active provider (Claude CLI or Copilot CLI) per call.
 // Shared here: rate limit, concurrency cap, spawn logging, error mapping, timeouts, optional per-call failover.
@@ -17,7 +17,7 @@ const COPILOT_MAX_OUTPUT_BYTES = 4_000_000
 const COPILOT_MAX_PROMPT_BYTES = 120_000
 const MAX_CONCURRENT = 4
 const MAX_SPAWNS_PER_MINUTE = 30
-export const CLAUDE_MODEL = 'claude-sonnet-5-5'
+export const CLAUDE_MODEL = CLAUDE_DEFAULT_MODEL
 
 let active = 0
 
@@ -45,18 +45,15 @@ export type RunOptions = {
   purpose?: string
   /** Force one provider for this call (no failover). Used by the settings "Test connection" button. */
   provider?: AiProvider
+  /** Model id for this call's provider, overriding the saved setting (settings "Test connection"). Must pass isValidModelId. */
+  model?: string
 }
 
 export const providerName = (provider: AiProvider) => (provider === 'claude' ? 'Claude CLI' : 'Copilot CLI')
 
-/** Value stored in topic_lessons.model. */
-export function modelLabel(provider: AiProvider): string {
-  return provider === 'claude' ? CLAUDE_MODEL : `copilot:${copilotModel() ?? 'auto'}`
-}
-
-function copilotModel(): string | null {
-  const value = (process.env.COPILOT_MODEL ?? '').trim()
-  return /^[A-Za-z0-9][\w.:-]*$/.test(value) ? value : null
+/** Value stored in topic_lessons.model, for a profile choice (or none = env/default). Claude: bare id; Copilot: `copilot:<id|auto>`. */
+export function modelLabel(provider: AiProvider, profileModel: string | null = null): string {
+  return labelForModel(provider, resolveModel(provider, profileModel).id)
 }
 
 // Which provider produced a returned object, so callers can record it without a signature change.
@@ -159,8 +156,8 @@ const missing = (provider: AiProvider) => new ClaudeCliError(
 
 // ---------------------------------------------------------------- Claude provider
 
-async function runClaudeProvider({ systemPrompt, message, jsonSchema, timeoutMs = DEFAULT_TIMEOUT_MS }: RunOptions, onOutcome: (outcome: string) => void): Promise<unknown> {
-  const args = ['--print', '--output-format', 'json', '--model', CLAUDE_MODEL, '--tools', '', '--no-session-persistence', '--system-prompt', systemPrompt]
+async function runClaudeProvider({ systemPrompt, message, jsonSchema, timeoutMs = DEFAULT_TIMEOUT_MS }: RunOptions, model: string, onOutcome: (outcome: string) => void, onResolved?: (id: string) => void): Promise<unknown> {
+  const args = ['--print', '--output-format', 'json', '--model', model, '--tools', '', '--no-session-persistence', '--system-prompt', systemPrompt]
   if (jsonSchema) args.push('--json-schema', JSON.stringify(jsonSchema))
   // `--` stops a message that starts with "-" from being parsed as a flag.
   args.push('--', message)
@@ -181,6 +178,10 @@ async function runClaudeProvider({ systemPrompt, message, jsonSchema, timeoutMs 
   try { outer = parseJsonText(command.stdout) } catch { throw new ClaudeCliError('Claude CLI returned unreadable output', 502) }
   const record = outer && typeof outer === 'object' && !Array.isArray(outer) ? (outer as Record<string, unknown>) : null
   if (!record) throw new ClaudeCliError('Claude CLI returned an invalid structured response', 502)
+
+  // An alias such as `sonnet` is resolved by the CLI; modelUsage is keyed by the concrete model that answered.
+  const used = record.modelUsage && typeof record.modelUsage === 'object' ? Object.keys(record.modelUsage)[0] : undefined
+  if (used && isValidModelId(used)) onResolved?.(used)
 
   if (record.is_error === true) {
     const detail = String(record.result ?? '')
@@ -246,10 +247,9 @@ export function parseCopilotOutput(stdout: string): CopilotParsed {
   return { text, errors, jsonLines }
 }
 
-async function copilotCall(prompt: string, timeoutMs: number, onOutcome: (outcome: string) => void): Promise<string> {
+async function copilotCall(prompt: string, timeoutMs: number, model: string | null, onOutcome: (outcome: string) => void): Promise<string> {
   if (Buffer.byteLength(prompt) > COPILOT_MAX_PROMPT_BYTES) throw new ClaudeCliError('Request is too large for Copilot CLI (prompt exceeds the argument size limit)', 502)
   const args = ['-p', prompt, '--output-format', 'json', '--available-tools=none', '--disable-builtin-mcps', '--no-custom-instructions', '--no-ask-user', '--allow-all-tools', '--no-auto-update']
-  const model = copilotModel()
   if (model) args.push('--model', model)
   const env: NodeJS.ProcessEnv = { ...process.env, LANG: process.env.LANG || 'C.UTF-8', TERM: 'dumb', NO_COLOR: '1' }
   if (process.env.COPILOT_HOME_DIR) env.COPILOT_HOME = process.env.COPILOT_HOME_DIR
@@ -283,17 +283,17 @@ function checkCopilotAnswer(text: string, jsonSchema: object | undefined): { val
   return { value, problems: validateJsonSchema(value, jsonSchema) }
 }
 
-async function runCopilotProvider(options: RunOptions, onOutcome: (outcome: string) => void): Promise<unknown> {
+async function runCopilotProvider(options: RunOptions, model: string | null, onOutcome: (outcome: string) => void): Promise<unknown> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const prompt = composeCopilotPrompt(options)
-  const first = await copilotCall(prompt, timeoutMs, onOutcome)
+  const first = await copilotCall(prompt, timeoutMs, model, onOutcome)
   const firstCheck = checkCopilotAnswer(first, options.jsonSchema)
   if (firstCheck.problems.length === 0) return firstCheck.value
 
   // One repair attempt with the concrete problems appended.
   console.warn('[copilot-cli] invalid output, repairing once:', firstCheck.problems.slice(0, 5).join('; '))
   const repair = `${prompt}\n\n=== YOUR PREVIOUS REPLY WAS REJECTED ===\nProblems:\n${firstCheck.problems.map((problem) => `- ${problem}`).join('\n')}\nPrevious reply (truncated):\n${first.slice(0, 3000)}\n\nReturn ONLY the corrected single JSON object.`
-  const second = await copilotCall(repair, timeoutMs, onOutcome)
+  const second = await copilotCall(repair, timeoutMs, model, onOutcome)
   const secondCheck = checkCopilotAnswer(second, options.jsonSchema)
   if (secondCheck.problems.length === 0) return secondCheck.value
   console.error('[copilot-cli] still invalid after repair:', secondCheck.problems.slice(0, 5).join('; '))
@@ -302,19 +302,24 @@ async function runCopilotProvider(options: RunOptions, onOutcome: (outcome: stri
 
 // ---------------------------------------------------------------- entry point
 
-async function runProvider(provider: AiProvider, options: RunOptions): Promise<unknown> {
+async function runProvider(provider: AiProvider, profileModel: string | null, options: RunOptions): Promise<unknown> {
   const startedAt = Date.now()
   let outcome = 'error'
+  let resolved = ''
+  // Profile > env > default. Every id is re-validated here, so a bad stored value can never become a flag.
+  const model = resolveModel(provider, profileModel).id
   try {
-    const result = provider === 'copilot' ? await runCopilotProvider(options, (o) => { outcome = o }) : await runClaudeProvider(options, (o) => { outcome = o })
-    if (result && typeof result === 'object') servedBy.set(result, modelLabel(provider))
+    const result = provider === 'copilot'
+      ? await runCopilotProvider(options, model, (o) => { outcome = o })
+      : await runClaudeProvider(options, model ?? CLAUDE_DEFAULT_MODEL, (o) => { outcome = o }, (id) => { resolved = id })
+    if (result && typeof result === 'object') servedBy.set(result, labelForModel(provider, provider === 'claude' && resolved ? resolved : model))
     return result
   } catch (error) {
     if (error instanceof ClaudeCliError) throw error
     if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') throw missing(provider)
     throw error
   } finally {
-    console.info(`[claude-cli] provider=${provider} purpose=${options.purpose ?? 'unknown'} duration_ms=${Date.now() - startedAt} result=${outcome}`)
+    console.info(`[claude-cli] provider=${provider} model=${model ?? 'auto'} purpose=${options.purpose ?? 'unknown'} duration_ms=${Date.now() - startedAt} result=${outcome}`)
   }
 }
 
@@ -331,7 +336,11 @@ export async function runClaudeJson(options: RunOptions): Promise<unknown> {
   if (active >= MAX_CONCURRENT) throw new ClaudeCliError('The tutor is busy. Try again in a moment.', 429)
   active += 1
   try {
-    const settings = options.provider ? { provider: options.provider, failover: false } : await getAiSettings()
+    if (options.model !== undefined && !isValidModelId(options.model)) throw new ClaudeCliError('Invalid model id', 400)
+    const saved = await getAiSettings()
+    const settings: AiSettings = options.provider
+      ? { ...saved, provider: options.provider, failover: false, models: { ...saved.models, [options.provider]: options.model ?? saved.models[options.provider] } }
+      : saved
     return await runWithSettings(settings, options)
   } finally {
     active -= 1
@@ -341,13 +350,14 @@ export async function runClaudeJson(options: RunOptions): Promise<unknown> {
 /** Runs on `settings.provider`; with `settings.failover`, a quota/auth/missing error is retried once on the other provider. */
 export async function runWithSettings(settings: AiSettings, options: RunOptions): Promise<unknown> {
   try {
-    return await runProvider(settings.provider, options)
+    return await runProvider(settings.provider, settings.models[settings.provider], options)
   } catch (error) {
     if (!settings.failover || !(error instanceof ClaudeCliError) || !error.kind) throw error
     const alternate = otherProvider(settings.provider)
     console.warn(`[claude-cli] failover purpose=${options.purpose ?? 'unknown'} from=${settings.provider} to=${alternate} reason=${error.kind}`)
     try {
-      return await runProvider(alternate, options)
+      // The other provider uses ITS OWN configured model, never the one chosen for the failed provider.
+      return await runProvider(alternate, settings.models[alternate], options)
     } catch (second) {
       const detail = second instanceof Error ? second.message : 'failed'
       throw new ClaudeCliError(`${error.message} (fallback to ${providerName(alternate)} also failed: ${detail})`, error.status, error.kind)

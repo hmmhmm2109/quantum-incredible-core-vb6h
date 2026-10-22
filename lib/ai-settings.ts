@@ -6,11 +6,36 @@ import { getCurrentUserId, scopedRepo } from 'lyzr-architect-pg'
 import { desc, eq } from 'lyzr-architect-pg/schema'
 import { learner_profiles } from '@/lib/db/schema'
 
-// Which AI CLI answers tutor requests. Stored in learner_profiles.preferences (ai_provider, ai_failover);
+// Which AI CLI answers tutor requests. Stored in learner_profiles.preferences (ai_provider, ai_failover, ai_model = { claude, copilot });
 // env AI_CLI_PROVIDER is the default when the profile has no choice yet. Server only.
 
 export type AiProvider = 'claude' | 'copilot'
-export type AiSettings = { provider: AiProvider; failover: boolean }
+export const CLAUDE_DEFAULT_MODEL = 'claude-sonnet-5-5'
+/** A model id as accepted from users and env: no spaces, cannot start with "-" (never read as a flag), at most 80 chars. */
+export const isValidModelId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/.test(value)
+
+/** One free-text model per provider (ids differ: claude-haiku-5-5 vs copilot's claude-haiku-5.5). null = not set. */
+export type AiModelSetting = Record<AiProvider, string | null>
+export type ModelSource = 'profile' | 'env' | 'default'
+
+const envModel = (provider: AiProvider): string | null => {
+  const value = (process.env[provider === 'claude' ? 'CLAUDE_MODEL' : 'COPILOT_MODEL'] ?? '').trim()
+  return isValidModelId(value) ? value : null
+}
+
+/** Profile > env > default. `id` is null only for Copilot's own default (no --model flag is passed). */
+export function resolveModel(provider: AiProvider, profileValue: string | null | undefined): { id: string | null; source: ModelSource } {
+  if (isValidModelId(profileValue)) return { id: profileValue, source: 'profile' }
+  const fromEnv = envModel(provider)
+  if (fromEnv) return { id: fromEnv, source: 'env' }
+  return { id: provider === 'claude' ? CLAUDE_DEFAULT_MODEL : null, source: 'default' }
+}
+
+/** Value stored in topic_lessons.model: bare id for Claude, `copilot:<id|auto>` for Copilot. */
+export const labelForModel = (provider: AiProvider, id: string | null): string => (provider === 'claude' ? id ?? CLAUDE_DEFAULT_MODEL : `copilot:${id ?? 'auto'}`)
+
+export type AiSettings = { provider: AiProvider; failover: boolean; models: AiModelSetting }
+const NO_MODELS = (): AiModelSetting => ({ claude: null, copilot: null })
 
 const CACHE_MS = 5_000
 const AVAILABILITY_CACHE_MS = 60_000
@@ -30,7 +55,9 @@ const latestProfile = async () => (await profileRepo().findMany({ orderBy: desc(
 
 function fromPreferences(preferences: unknown): AiSettings {
   const prefs = preferences && typeof preferences === 'object' && !Array.isArray(preferences) ? (preferences as Record<string, unknown>) : {}
-  return { provider: isProvider(prefs.ai_provider) ? prefs.ai_provider : envDefaultProvider(), failover: prefs.ai_failover === true }
+  const stored = prefs.ai_model && typeof prefs.ai_model === 'object' && !Array.isArray(prefs.ai_model) ? (prefs.ai_model as Record<string, unknown>) : {}
+  const models: AiModelSetting = { claude: isValidModelId(stored.claude) ? stored.claude : null, copilot: isValidModelId(stored.copilot) ? stored.copilot : null }
+  return { provider: isProvider(prefs.ai_provider) ? prefs.ai_provider : envDefaultProvider(), failover: prefs.ai_failover === true, models }
 }
 
 /** Settings of the authenticated learner (cached a few seconds). Falls back to the env default outside a request. */
@@ -40,7 +67,7 @@ export async function getAiSettings(): Promise<AiSettings> {
   const key = userId ?? 'anonymous'
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value
-  let value: AiSettings = { provider: envDefaultProvider(), failover: false }
+  let value: AiSettings = { provider: envDefaultProvider(), failover: false, models: NO_MODELS() }
   if (userId) {
     try {
       const profile = await latestProfile()
@@ -53,13 +80,17 @@ export async function getAiSettings(): Promise<AiSettings> {
   return value
 }
 
-/** Merges the given fields into the learner's preferences and drops the cache. */
-export async function saveAiSettings(update: Partial<AiSettings>): Promise<AiSettings> {
+/** `models` entries: a string sets, null clears (back to env/default), absent keeps. Values must already be validated. */
+export async function saveAiSettings(update: Partial<Omit<AiSettings, 'models'>> & { models?: Partial<AiModelSetting> }): Promise<AiSettings> {
   const profile = await latestProfile()
   const base = profile?.preferences && typeof profile.preferences === 'object' && !Array.isArray(profile.preferences) ? (profile.preferences as Record<string, unknown>) : {}
   const current = fromPreferences(base)
-  const next: AiSettings = { provider: update.provider ?? current.provider, failover: update.failover ?? current.failover }
-  const preferences = { ...base, ai_provider: next.provider, ai_failover: next.failover }
+  const models: AiModelSetting = {
+    claude: update.models?.claude !== undefined ? update.models.claude : current.models.claude,
+    copilot: update.models?.copilot !== undefined ? update.models.copilot : current.models.copilot,
+  }
+  const next: AiSettings = { provider: update.provider ?? current.provider, failover: update.failover ?? current.failover, models }
+  const preferences = { ...base, ai_provider: next.provider, ai_failover: next.failover, ai_model: next.models }
   if (profile) await profileRepo().update(eq(learner_profiles.id, profile.id), { preferences })
   else await profileRepo().insert({ display_name: 'Learner', preferences, onboarding_state: {} })
   cache.clear()
