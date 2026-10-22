@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useAuth } from 'lyzr-architect-pg/client'
 import { InlineText, PromptText } from '@/components/RichText'
 import { ArrowRight, BookOpen, Eye, Check, ChevronDown, ChevronUp, CircleAlert, CircleCheck, FileDiff, Gauge, Lightbulb, Loader2, LockKeyhole, MessageCircleQuestion, MessageSquareText, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Target, TerminalSquare, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -123,6 +124,28 @@ function ExerciseBrief({ activity: a }: { activity: PracticeActivity }) {
     {a.rubric.length > 0 && <div>{heading('Rubric')}<div className="grid gap-2 sm:grid-cols-3">{a.rubric.map((criterion) => <div key={criterion.criterion} className="rounded-xl border border-border/70 p-3 text-xs"><div className="font-semibold"><InlineText text={criterion.criterion} /></div><div className="mt-1 text-muted-foreground"><span>{`Weight ${criterion.weight} · `}</span><InlineText text={criterion.evidence} /></div></div>)}</div></div>}</CardContent></Card>
 }
 
+type ReferenceSolutionData = { files: { path: string; content: string }[]; explanation: string }
+
+// The server only returns the solution once this learner has an attempt on the exercise; old exercises have none (the card stays hidden).
+function ReferenceSolution({ activityId }: { activityId: string }) {
+  const { authFetch } = useAuth()
+  const [solution, setSolution] = useState<ReferenceSolutionData | null>(null)
+  useEffect(() => {
+    let alive = true
+    setSolution(null)
+    authFetch('/api/lesson/solution', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activity_id: activityId }) })
+      .then((response) => response.json())
+      .then((json) => { if (alive && json?.success && json.data?.available) setSolution({ files: json.data.files, explanation: json.data.explanation }) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [activityId, authFetch])
+  if (!solution) return null
+  return <Card className="rounded-3xl border-border/70 shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><Eye className="h-5 w-5 text-primary" />Reference solution</CardTitle></CardHeader><CardContent className="space-y-3">
+    {solution.explanation && <p className="text-sm leading-6 text-muted-foreground"><InlineText text={solution.explanation} /></p>}
+    {solution.files.map((file) => <details key={file.path} className="rounded-xl border border-border/70"><summary className="cursor-pointer px-3 py-2 font-mono text-xs">{file.path}</summary><pre className="overflow-x-auto whitespace-pre-wrap border-t border-border/70 bg-muted/70 p-3 font-mono text-xs leading-5">{file.content}</pre></details>)}
+  </CardContent></Card>
+}
+
 export default function ResultSection({ data, onStartNext, nextQuestion, newQuestions, reviewAnswers, retrySame, nextLabel, starting, onRetry, onBack, onLectureAction, onRetrievalSubmit, onOpenLesson, onAskAbout, loading, statusMessage }: ReviewSectionProps) {
   const ai = useAiProvider()
   const [retrievalAnswer, setRetrievalAnswer] = useState('')
@@ -146,6 +169,7 @@ export default function ResultSection({ data, onStartNext, nextQuestion, newQues
 
 
     {data.hints.length > 0 && <Card className="rounded-3xl border-border/70 shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><Lightbulb className="h-5 w-5 text-primary" />Hint ladder</CardTitle></CardHeader><CardContent className="space-y-3">{data.hints.length > 0 ? data.hints.map((hint) => <div key={hint.stage} className={`rounded-2xl border p-4 ${hint.revealed ? 'border-primary/20 bg-primary/[0.035]' : 'border-border/70 bg-muted/30'}`}><div className="flex flex-wrap items-center gap-2"><Badge variant={hint.revealed ? 'default' : 'outline'} className="rounded-full">Stage {hint.stage}</Badge><span className="text-sm font-semibold">{hint.label}</span><span className="ml-auto text-xs text-muted-foreground"><span>{hint.revealed ? 'revealed' : 'concealed'}</span></span></div>{hint.revealed && <p className="mt-2 text-sm leading-6 text-muted-foreground"><InlineText text={hint.content} /></p>}</div>) : null}</CardContent></Card>}
+    {!isAssessment && data.activity.id?.startsWith('lesson-') && <ReferenceSolution activityId={data.activity.id} />}
 
     {!isAssessment && (hasTests || data.feedback.findings.length > 0) && <Card className="rounded-3xl border-border/70 shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><TerminalSquare className="h-5 w-5 text-primary" /><span>{hasTests ? 'Test evidence' : 'Findings'}</span></CardTitle></CardHeader><CardContent className="space-y-1">{data.feedback.public_test_feedback.length > 0 ? data.feedback.public_test_feedback.map((test) => <div key={test.name} className="flex items-start gap-3 border-t border-border/70 py-3"><div className="mt-0.5">{statusIcon(test.status)}</div><div className="min-w-0 flex-1"><div className="font-medium"><InlineText text={test.name} /></div><p className="mt-1 text-sm leading-6 text-muted-foreground"><InlineText text={test.details} /></p></div><Badge variant="outline" className="rounded-full">{test.status}</Badge></div>) : null}{data.feedback.hidden_test_summary && <div className="mt-3 flex items-start gap-3 rounded-2xl border border-border/70 bg-muted/40 p-4"><LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /><div><div className="text-sm font-semibold">Hidden-test summary</div><p className="mt-1 text-sm leading-6 text-muted-foreground">{data.feedback.hidden_test_summary}</p></div></div>}{data.feedback.findings.length > 0 && <div className={hasTests ? 'mt-5 border-t border-border/70 pt-4' : ''}>{hasTests && <div className="mb-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Coach findings</div>}<div className="space-y-3">{data.feedback.findings.map((finding, index) => <div key={`${finding.category}-${finding.message}-${index}`} className="rounded-2xl border border-border/70 p-4"><div className="flex flex-wrap items-center gap-2"><Badge variant={finding.severity === 'error' ? 'destructive' : 'outline'} className="rounded-full">{finding.severity}</Badge><Badge variant="secondary" className="rounded-full">{finding.category}</Badge></div><div className="mt-2 text-sm font-semibold"><InlineText text={finding.message} /></div><p className="mt-1 text-sm leading-6 text-muted-foreground"><InlineText text={finding.evidence} /></p></div>)}</div></div>}</CardContent></Card>}
 

@@ -80,9 +80,11 @@ export const COACH_RESULT_SCHEMA: Schema = obj({
 // so the learner can start reading before the exercise exists.
 const coachProperties = COACH_RESULT_SCHEMA.properties as Record<string, Schema>
 export const LECTURE_SCHEMA: Schema = obj({ lecture: coachProperties.lecture, learner_explanation: str })
-export const PRACTICE_SCHEMA: Schema = obj({ activity: coachProperties.activity, hints: coachProperties.hints })
+// A complete worked answer, kept on the server and shown only after the learner has submitted (POST /api/lesson/solution).
+export const REFERENCE_SOLUTION_SCHEMA: Schema = obj({ files: arr(obj({ path: str, content: str })), explanation: str })
+export const PRACTICE_SCHEMA: Schema = obj({ activity: coachProperties.activity, hints: coachProperties.hints, reference_solution: REFERENCE_SOLUTION_SCHEMA })
 // One exercise over 2-4 topics: the single-topic shape plus which topic is used where (the route re-checks it against the requested topics).
-export const MULTI_PRACTICE_SCHEMA: Schema = obj({ activity: coachProperties.activity, hints: coachProperties.hints, topics_covered: arr(obj({ domain_id: str, topic_id: str, how_used: str })) })
+export const MULTI_PRACTICE_SCHEMA: Schema = obj({ activity: coachProperties.activity, hints: coachProperties.hints, reference_solution: REFERENCE_SOLUTION_SCHEMA, topics_covered: arr(obj({ domain_id: str, topic_id: str, how_used: str })) })
 
 // The adapt call (enriched lecture) must say, for every section, which learner questions were folded into it (empty list = untouched).
 const lectureProps = (coachProperties.lecture as { properties: Record<string, Schema> }).properties

@@ -182,6 +182,7 @@ Reuse what exists. Do not duplicate a route, helper or provider; extend it. New 
 | `/api/lesson` | POST | Lecture (base, variants, `adapt`, `cached_only`, `regenerate`) or topic practice (`next`) from the `topic_lessons` cache; Claude only on a miss |
 | `/api/lesson/ask` | GET/POST | Per-topic learner Q&A stored as `question` learning events (gaps feed `adapt`) |
 | `/api/lesson/transfer` | GET/POST | Claude grades a transfer exercise, or a retrieval check with `kind: 'retrieval'`; saved as an attempt + learning event |
+| `/api/lesson/solution` | POST | Reference solution of a practice exercise, returned only after the learner has an attempt on it (kept out of `/api/lesson`); 0 Claude calls |
 | `/api/lesson/complete` | POST | "Mark as learned" |
 | `/api/claude` | POST | Generic coach request (practice answers, lecture actions); also serves graded results shaped like the coach schema |
 | `/api/settings/ai` | GET/PUT/POST | AI provider setting, CLI availability, test call |

@@ -98,6 +98,8 @@ Env and caveats: README "AI provider setting". `runClaudeJson` keeps its signatu
 14. **No automated tests.** Cheapest wins: `lib/assessment-validate.ts` and `lib/rate-limit.ts` (pure functions).
 15. **Review the Design Patterns content (new, unreviewed).** The 15 `patterns` topics in `lib/taxonomy.ts` are written from general knowledge (C++17 primary, `C idiom` noted). The `vehicle-architecture` topic (SOME/IP request/response, event and field, DDS and MQTT QoS, AUTOSAR Adaptive) and the vehicle-variant HAL examples are unverified against the specs or any project architecture. Lesson/practice/assessment prompts get a one-line note (`domainPromptHint` in `lib/taxonomy.ts`) that examples are C++17 unless the subtopic says otherwise. The mixed diagnostic now asks 7 questions.
 
+16. **Reference solution (new, untested with a real model).** Practice exercises now carry `reference_solution` (`REFERENCE_SOLUTION_SCHEMA`); `/api/lesson` never sends it, `POST /api/lesson/solution` returns it after an attempt exists, and `ReferenceSolution` in `result-section.tsx` shows it on the review screen. Exercises cached earlier have none and show no card: generate a new one ("Start next exercise"). Check that the generated code actually fits the starter files and passes the test plan; the model is told to but nothing verifies it.
+
 ## Testing notes
 
 No automated tests. Previous verification used a throwaway local Postgres and headless Chromium. Re-check after changes:

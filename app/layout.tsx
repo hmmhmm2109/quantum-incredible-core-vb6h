@@ -18,8 +18,8 @@ import { SSOGuard } from '@/components/SSOGuard'
 const inter = Inter({ subsets: ['latin', 'vietnamese'], variable: '--font-inter' })
 
 export const metadata: Metadata = {
-  title: 'Next.js App',
-  description: 'Built with Next.js, React, and Tailwind CSS',
+  title: 'EmbedPath',
+  description: 'Adaptive embedded-systems learning',
   icons: {
     icon: '/lyzr.png',
   },
