@@ -48,9 +48,9 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       const response = await authFetch('/api/lesson', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const result = recordValue(await response.json().catch(() => null))
       const responseRecord = recordValue(result.response)
-      if (!response.ok || result.success !== true) throw new Error(stringValue(result.error, 'Claude CLI could not complete this request.'))
+      if (!response.ok || result.success !== true) throw new Error(stringValue(result.error, 'The AI provider could not complete this request.'))
       const normalized = normalizeCoachResult(responseRecord.result, responseRecord.metadata)
-      if (!normalized) throw new Error('Claude CLI response did not match the saved learning schema.')
+      if (!normalized) throw new Error('The AI response did not match the saved learning schema.')
       return normalized
     } finally { setActiveAgentId(null) }
   }
@@ -97,7 +97,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       void loadSavedWork(domainId, topicId, variantRef.current)
     } catch (error) {
       if (lessonRef.current !== lessonId) return
-      const message = error instanceof Error ? error.message : 'Claude CLI could not be reached.'
+      const message = error instanceof Error ? error.message : 'The AI provider could not be reached.'
       if (initial) setLesson({ domainId, topicId, status: 'error', error: message, variant: null, practice: 'loading', busy: false })
       else { setLesson((current) => current && { ...current, busy: false }); toast.error(message) }
     }
@@ -143,7 +143,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       const data = await withRetry(async () => {
         const response = await authFetch('/api/lesson/transfer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, domain_id: domainId, topic_id: topicId, answer, ...(variantRef.current && { variant: variantRef.current }) }) })
         const body = recordValue(await response.json().catch(() => null))
-        if (!response.ok || body.success !== true) throw new HttpError(stringValue(body.error, 'Claude CLI could not grade this answer.'), response.status)
+        if (!response.ok || body.success !== true) throw new HttpError(stringValue(body.error, 'The AI provider could not grade this answer.'), response.status)
         return body.data as unknown as TransferResult
       })
       if (lessonRef.current !== lessonId) return
@@ -151,7 +151,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       await loadSavedData()
     } catch (error) {
       if (lessonRef.current !== lessonId) return
-      setError(error instanceof Error ? error.message : 'Claude CLI could not be reached.'); setStatus('error')
+      setError(error instanceof Error ? error.message : 'The AI provider could not be reached.'); setStatus('error')
     }
   }
   const lessonRetrievalSubmit = (answer: string) => submitAnswer('retrieval', answer)
@@ -168,7 +168,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       lessonRef.current = null; setSelectedActivity(practice.activity); setHints(concealHints(practice.hints)); clearWorkspace(); setView('practice')
     } catch (error) {
       if (practiceReqRef.current !== request) return
-      const message = error instanceof Error ? error.message : 'Claude CLI could not be reached.'
+      const message = error instanceof Error ? error.message : 'The AI provider could not be reached.'
       setPracticeLoad({ domainId, topicId, status: 'error', error: message })
       if (!fromSkillMap) toast.error(`Could not prepare the exercise. ${message}`, { action: { label: 'Retry', onClick: () => void openTopicPractice(domainId, topicId, false, next) } })
     }

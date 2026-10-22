@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { AuthProvider, ProtectedRoute, useAuth } from 'lyzr-architect-pg/client'
 import { Toaster, toast } from 'sonner'
+import { getAiProviderShort, useLoadAiProvider } from '@/hooks/use-ai-provider'
 import { AuthScreen, HeaderBar, MobileNavigation, SideNavigation } from '@/app/sections/app-shell'
 import { HistoryPanel, ProfilePanel } from '@/app/sections/history-profile-section'
 import HomeSection, { type HomeAttempt, type HomeRecommendation } from '@/app/sections/home-section'
@@ -28,6 +29,7 @@ const UNREADABLE_QUESTION: AssessmentQuestion = { stem: 'This question could not
 
 function EmbedPathApp() {
   const { authFetch, user } = useAuth()
+  useLoadAiProvider(authFetch, !!user)
   const [view, setView] = useState<ViewName>('home')
   const [askPrefill, setAskPrefill] = useState<string | null>(null)
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
@@ -114,7 +116,7 @@ function EmbedPathApp() {
     try {
       return await withRetry(async () => {
         const item = arrayValue((await postGenerate({ session_id: sessionId, slot })).items).filter(isRecord)[0]
-        if (!item) throw new HttpError('Claude returned no question.', 502)
+        if (!item) throw new HttpError(`${getAiProviderShort()} returned no question.`, 502)
         return item
       })
     } catch (error) {
@@ -193,14 +195,14 @@ function EmbedPathApp() {
       setGenerating(false)
       return
     }
-    const toastId = toast.loading(scope ? `Claude is writing your ${topicLabel(scope.domainId, scope.topicId)} question…` : 'Claude is writing your first question…')
+    const toastId = toast.loading(scope ? `${getAiProviderShort()} is writing your ${topicLabel(scope.domainId, scope.topicId)} question…` : `${getAiProviderShort()} is writing your first question…`)
     try {
       const data = await postGenerate(scope ? { domain_id: scope.domainId, topic_id: scope.topicId, topic_label: topicLabel(scope.domainId, scope.topicId) } : undefined)
       const session = recordValue(data.session)
       const items = arrayValue(data.items).filter(isRecord)
       const sessionId = stringValue(session.id)
       const total = Math.max(numberValue(session.total, items.length), items.length)
-      if (items.length === 0 || !sessionId) throw new Error('Claude returned no questions.')
+      if (items.length === 0 || !sessionId) throw new Error(`${getAiProviderShort()} returned no questions.`)
       setGenerated({ sessionId, total, items, coverage: arrayValue(session.topic_coverage).filter(isRecord).map((item) => ({ domain_id: stringValue(item.domain_id), topic_id: stringValue(item.topic_id), weight: numberValue(item.weight), subtopic: stringValue(item.subtopic) })), pending: total - 1, missing: [] })
       setAssessmentScope(scope)
       setResumedSessionId(null)
@@ -292,15 +294,15 @@ function EmbedPathApp() {
       const result: unknown = await response.json()
       const resultRecord = recordValue(result)
       const responseRecord = recordValue(resultRecord.response)
-      if (!response.ok || resultRecord.success !== true || responseRecord.status !== 'success') { const messageText = stringValue(responseRecord.message, stringValue(resultRecord.error, 'Claude CLI could not complete this request.')); setDataError(messageText); toast.error(messageText); return null }
+      if (!response.ok || resultRecord.success !== true || responseRecord.status !== 'success') { const messageText = stringValue(responseRecord.message, stringValue(resultRecord.error, 'The AI provider could not complete this request.')); setDataError(messageText); toast.error(messageText); return null }
       const normalized = normalizeCoachResult(responseRecord.result, responseRecord.metadata)
-      if (!normalized) { const messageText = 'Claude CLI response did not match the saved learning schema. Nothing was marked complete.'; setDataError(messageText); toast.error(messageText); return null }
+      if (!normalized) { const messageText = 'The AI response did not match the saved learning schema. Nothing was marked complete.'; setDataError(messageText); toast.error(messageText); return null }
       const progress = recordValue(resultRecord.session_progress)
       if (hasOwn(progress, 'total')) normalized.session_progress = { answered: numberValue(progress.answered), total: numberValue(progress.total), completed: progress.completed === true }
       if (resultRecord.replayed === true) return { ...normalized, replayed: { selected_answers: Array.isArray(resultRecord.selected_answers) ? resultRecord.selected_answers.filter((entry): entry is string => typeof entry === 'string') : [] } }
       return normalized
     } catch (error) {
-      const messageText = error instanceof Error ? error.message : 'Claude CLI could not be reached.'
+      const messageText = error instanceof Error ? error.message : 'The AI provider could not be reached.'
       setDataError(messageText)
       toast.error(messageText)
       return null
@@ -394,8 +396,8 @@ function EmbedPathApp() {
   const handleSampleData = (checked: boolean) => { setSampleData(checked); if (!checked) toast.success('Sample examples removed. Saved data remains visible.'); else toast.success('Sample examples restored.') }
   const renderView = () => {
     if (view === 'home') return <HomeSection displayName={displayName} dateLabel={dateLabel} domains={homeDomains} attempts={homeAttempts} recommendation={homeRecommendation} sampleData={sampleData} dataError={dataError} onStartPractice={openRecentPractice} onOpenSkillMap={() => setView('skill-map')} onOpenHistory={() => setView('history')} onStartAssessment={openAssessment} domainOptions={DOMAIN_TOPIC_OPTIONS} onStartLearningTopic={startTopicLesson} onStartAssessmentTopic={openTopicAssessment} topicActionLoading={loading} />
-    if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentProgress={assessmentProgress} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => { if (generated) { const item = generated.items[Math.min(assessmentIndex + 1, generated.items.length - 1)]; if (item) { setCurrentSlot(itemSlot(item)); reachSlot(generated.sessionId, itemSlot(item)) } } else setRawIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)) }} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your response to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
-    if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentProgress={assessmentProgress} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} onRestartAssessment={resumedSessionId ? restartAssessment : undefined} restarting={restarting} currentAnswered={Boolean(generated && answeredIds.has(stringValue(generated.items[Math.min(assessmentIndex, generated.items.length - 1)]?.id)))} onBack={() => setView('home')} onStartClaude={() => setStatusMessage('Claude CLI is the active tutor runtime. Submit your assessment to run it through the Linux host OAuth session.')} onCancelClaude={() => setStatusMessage('No Claude CLI request is currently running.')} />
+    if (view === 'practice') return <PracticeSection mode="practice" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentProgress={assessmentProgress} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitPractice} onNextAssessment={() => { if (generated) { const item = generated.items[Math.min(assessmentIndex + 1, generated.items.length - 1)]; if (item) { setCurrentSlot(itemSlot(item)); reachSlot(generated.sessionId, itemSlot(item)) } } else setRawIndex((index) => Math.min(index + 1, assessmentQuestions.length - 1)) }} onBack={() => setView('home')} onStartClaude={() => setStatusMessage(`${getAiProviderShort()} CLI is the active tutor runtime. Submit your response to run it through the host\'s existing login.`)} onCancelClaude={() => setStatusMessage(`No ${getAiProviderShort()} CLI request is currently running.`)} />
+    if (view === 'assessment') return <PracticeSection mode="assessment" activity={selectedActivity} hints={hints} claude={claudeState} assessmentQuestion={assessmentQuestion} assessmentIndex={generated ? currentSlot : assessmentIndex} assessmentTotal={generated ? generated.total : assessmentQuestions.length} assessmentCoverage={assessmentCoverage} assessmentProgress={assessmentProgress} assessmentMeta={assessmentMeta} generatedCount={generated?.items.length ?? assessmentQuestions.length} missingSlots={generated?.missing ?? []} retrying={(generated?.pending ?? 0) > 0} onRetryMissing={retryMissing} answerText={answerText} justification={justification} selectedAnswers={selectedAnswers} confidence={confidence} loading={loading} saving={saving} statusMessage={statusMessage} onChangeAnswer={setAnswerText} onChangeJustification={setJustification} onChangeConfidence={setConfidence} onToggleAnswer={toggleAnswer} onRevealHint={revealHint} onRun={runTests} onSaveDraft={saveDraft} onSubmit={submitAssessment} onNextAssessment={handleNextAssessment} onRestartAssessment={resumedSessionId ? restartAssessment : undefined} restarting={restarting} currentAnswered={Boolean(generated && answeredIds.has(stringValue(generated.items[Math.min(assessmentIndex, generated.items.length - 1)]?.id)))} onBack={() => setView('home')} onStartClaude={() => setStatusMessage(`${getAiProviderShort()} CLI is the active tutor runtime. Submit your assessment to run it through the host\'s existing login.`)} onCancelClaude={() => setStatusMessage(`No ${getAiProviderShort()} CLI request is currently running.`)} />
     if (view === 'review' && review) return <ResultSection data={review} onStartNext={startNextActivity} nextQuestion={nextQuestion} nextLabel={nextStep?.label ?? 'Choose a topic in Skill Map'} starting={practiceLoad?.status === 'loading'} onRetry={() => openPractice(selectedActivity)} onBack={() => setView('home')} onLectureAction={handleLectureAction} onRetrievalSubmit={handleRetrievalSubmit} onOpenLesson={startTopicLesson} onAskAbout={askAboutQuestion} loading={loading} statusMessage={statusMessage} />
     if (view === 'lesson' && lesson) {
       const domain = findDomain(lesson.domainId); const topic = findTopic(lesson.domainId, lesson.topicId)
@@ -409,7 +411,7 @@ function EmbedPathApp() {
     }
     if (view === 'skill-map') return <SkillMapSection domains={skillDomains} sampleData={sampleData} loading={loading} onRetake={openAssessment} onPractice={handlePracticeFromSkillMap} practiceState={practiceLoad} onStartLesson={startTopicLesson} onAssess={openTopicAssessment} onBack={() => { practiceReqRef.current++; setPracticeLoad(null); setView('home') }} />
     if (view === 'history') return <HistoryPanel attempts={homeAttempts} sampleData={sampleData} onBack={() => setView('home')} onPractice={openRecentPractice} />
-    return <ProfilePanel displayName={displayName} email={displayEmail} profile={saved.profile} sampleData={sampleData} onBack={() => setView('home')} onToggleSampleData={handleSampleData} />
+    return <ProfilePanel displayName={displayName} email={displayEmail} profile={saved.profile} sampleData={sampleData} authFetch={authFetch} onBack={() => setView('home')} onToggleSampleData={handleSampleData} />
   }
   return <div className="min-h-screen bg-background text-foreground antialiased"><div className="flex min-h-screen"><SideNavigation view={view} onNavigate={setView} displayName={displayName} /><div className="min-w-0 flex-1"><HeaderBar view={view} displayName={displayName} theme={theme} onToggleTheme={handleTheme} sampleData={sampleData} onToggleSampleData={handleSampleData} activeAgentId={activeAgentId} streak={sampleData ? 0 : headerStats.streak} exercises={sampleData ? 0 : headerStats.exercises} onNavigate={setView} /><MobileNavigation view={view} onNavigate={setView} /><main className="min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{dataLoading ? <div className="mx-auto flex min-h-[22rem] max-w-4xl flex-col items-center justify-center gap-3 text-center"><Loader2 className="h-7 w-7 animate-spin text-primary" /><p className="text-sm text-muted-foreground">Loading your learning desk…</p></div> : renderView()}</main></div></div></div>
 }

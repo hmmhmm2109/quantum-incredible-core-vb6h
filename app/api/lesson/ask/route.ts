@@ -113,7 +113,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const saved = await singleFlight(`ask:${ownerId}:${domain.id}:${topic.id}:${variant ?? 'base'}:${sectionIndex ?? 'general'}:${hash}`, async () => {
       const raw = await runClaudeJson({ systemPrompt: ASK_PROMPT, message, jsonSchema: ASK_SCHEMA, purpose: 'lesson/ask' }) as Record<string, unknown>
       const gap = raw.gap as Record<string, unknown> | undefined
-      if (typeof raw.answer !== 'string' || !raw.answer.trim() || typeof gap?.is_gap !== 'boolean') throw new ClaudeCliError('Claude CLI returned an invalid answer', 502)
+      if (typeof raw.answer !== 'string' || !raw.answer.trim() || typeof gap?.is_gap !== 'boolean') throw new ClaudeCliError('The AI provider returned an invalid answer', 502)
       const isGap = gap.is_gap
       const evidence: QuestionEvidence = {
         kind: 'lesson_question', variant, section_index: sectionIndex, section_title: section?.title ?? null, question, answer: raw.answer,

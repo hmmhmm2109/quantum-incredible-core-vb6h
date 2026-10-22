@@ -103,7 +103,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       purpose: `lesson/${exercise.kind}-grade`,
     }) as Record<string, unknown>
     const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : []
-    if (typeof raw.verdict !== 'string' || !VERDICTS.includes(raw.verdict) || typeof raw.feedback !== 'string') throw new ClaudeCliError('Claude CLI returned an invalid grade', 502)
+    if (typeof raw.verdict !== 'string' || !VERDICTS.includes(raw.verdict) || typeof raw.feedback !== 'string') throw new ClaudeCliError('The AI provider returned an invalid grade', 502)
     const score = Math.round(Math.max(0, Math.min(100, Number(raw.score) || 0)))
     const graded = { verdict: raw.verdict, score, feedback: raw.feedback, strengths: list(raw.strengths), missed_points: list(raw.missed_points), model_answer_summary: typeof raw.model_answer_summary === 'string' ? raw.model_answer_summary : '', ...(exercise.rule && { expected_points: exercise.rule }) }
 

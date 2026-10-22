@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { authMiddleware, getCurrentUserId, getDb } from 'lyzr-architect-pg'
 import { and, desc, eq, inArray, like, or, sql } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
-import { ClaudeCliError, MODEL, runClaudeJson } from '@/lib/claude-cli'
+import { ClaudeCliError, runClaudeJson, servedModel } from '@/lib/claude-cli'
 import { LECTURE_SCHEMA, PRACTICE_SCHEMA } from '@/lib/coach-schema'
 import { attempts, learning_events, topic_lessons } from '@/lib/db/schema'
 import { ADAPT_MAX_GAPS, asEvidence, isOpenGap, QUESTION_EVENT } from '@/lib/lesson-gaps'
@@ -92,7 +92,7 @@ function assemble(domainId: string, topicId: string, domainLabel: string, topicN
     mastery_evidence: [],
     recommended_next_activity: { domain_id: domainId, topic_id: topicId, format: 'practice', level_band: 'Basic', reason: 'Practice what the lesson just covered.', estimated_duration_minutes: 15 },
     learner_explanation: parts.learner_explanation ?? '',
-    claude_cli: { available: true, status: 'completed', notice: 'Lesson written by Claude CLI and cached per topic.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
+    claude_cli: { available: true, status: 'completed', notice: 'Lesson written by the AI CLI and cached per topic.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
   }
 }
 
@@ -123,8 +123,8 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       // Concurrent misses for the same lesson share one Claude call; regenerate has its own key so it never joins a stale in-flight call.
       const content = await singleFlight(`lesson:${domain.id}:${topic.id}:${k}${replace ? ':regen' : ''}`, async () => {
         const generated = await build()
-        if (replace) await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind: k, content: generated, model: MODEL }).onConflictDoUpdate({ target: [topic_lessons.domain_id, topic_lessons.topic_id, topic_lessons.kind], set: { content: generated, model: MODEL, updated_at: new Date() } })
-        else await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind: k, content: generated, model: MODEL }).onConflictDoNothing()
+        if (replace) await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind: k, content: generated, model: servedModel(generated) }).onConflictDoUpdate({ target: [topic_lessons.domain_id, topic_lessons.topic_id, topic_lessons.kind], set: { content: generated, model: servedModel(generated), updated_at: new Date() } })
+        else await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind: k, content: generated, model: servedModel(generated) }).onConflictDoNothing()
         // Return the persisted row (another process may have won the insert) so every caller sees the same content.
         const [stored] = await db.select().from(topic_lessons).where(where).limit(1)
         return (stored?.content as Record<string, unknown> | undefined) ?? generated
@@ -180,7 +180,7 @@ ${JSON.stringify(base.content)}
 <learner_gaps>
 ${JSON.stringify(gapList)}
 </learner_gaps>`, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/adapt' }) as Record<string, unknown>
-          await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind, content: generated, model: MODEL }).onConflictDoUpdate({ target: [topic_lessons.domain_id, topic_lessons.topic_id, topic_lessons.kind], set: { content: generated, model: MODEL, updated_at: new Date() } })
+          await db.insert(topic_lessons).values({ domain_id: domain.id, topic_id: topic.id, kind, content: generated, model: servedModel(generated) }).onConflictDoUpdate({ target: [topic_lessons.domain_id, topic_lessons.topic_id, topic_lessons.kind], set: { content: generated, model: servedModel(generated), updated_at: new Date() } })
           await db.update(learning_events).set({ evidence: sql`${learning_events.evidence} || ${JSON.stringify({ resolved: true, resolved_at: new Date().toISOString() })}::jsonb` }).where(inArray(learning_events.id, gaps.map((row) => row.id)))
           return generated
         })

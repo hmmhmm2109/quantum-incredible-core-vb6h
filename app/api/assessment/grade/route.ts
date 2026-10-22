@@ -110,7 +110,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         estimated_duration_minutes: 20,
       },
       learner_explanation: key.explanation ?? '',
-      claude_cli: { available: true, status: 'completed', notice: 'Claude CLI wrote this question; grading ran instantly on the server against its stored answer key.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
+      claude_cli: { available: true, status: 'completed', notice: 'The AI CLI wrote this question; grading ran instantly on the server against its stored answer key.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
     }
 
     const ownerId = getCurrentUserId()

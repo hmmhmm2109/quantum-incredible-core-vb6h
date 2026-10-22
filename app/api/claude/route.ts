@@ -32,6 +32,6 @@ export const POST = authMiddleware(async (request: NextRequest) => {
   } catch (error) {
     if (error instanceof ClaudeCliError) return NextResponse.json({ success: false, error: error.message }, { status: error.status })
     console.error('[API] POST /api/claude error:', error)
-    return NextResponse.json({ success: false, error: 'Claude CLI execution failed' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'AI request failed' }, { status: 500 })
   }
 })
