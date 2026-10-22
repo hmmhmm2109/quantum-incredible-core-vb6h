@@ -2,11 +2,11 @@ import type { GeneratedAssessment, JsonRecord } from '@/lib/app-types'
 import type { AssessmentQuestion } from '@/app/sections/practice-section'
 import { itemSlot } from '@/lib/assessment-slots'
 import { arrayValue, isRecord, normalizeQuestion, nullableString, numberValue, recordValue, stringValue } from '@/lib/normalize'
-import { SAMPLE_DOMAINS } from '@/lib/sample-data'
+import { SAMPLE_DOMAINS, sampleFocusTopicId } from '@/lib/sample-data'
 
 // One entry per unique topic, in slot order: weight = number of questions, subtopics = the angle each slot covers (empty for sessions stored before subtopics were kept), slots = those question slots (same order as subtopics).
 export function buildAssessmentCoverage(sampleData: boolean, generated: GeneratedAssessment | null, assessmentSession: JsonRecord | undefined) {
-  if (sampleData && !generated) return SAMPLE_DOMAINS.map((domain, index) => ({ domain_id: domain.id, topic_id: domain.focus.toLowerCase().replaceAll(' ', '-'), weight: 1, subtopics: [] as string[], slots: [index] }))
+  if (sampleData && !generated) return SAMPLE_DOMAINS.map((domain, index) => ({ domain_id: domain.id, topic_id: sampleFocusTopicId(domain.id), weight: 1, subtopics: [] as string[], slots: [index] }))
   const raw = generated ? generated.coverage : arrayValue(assessmentSession?.topic_coverage).filter(isRecord).map((item) => ({ domain_id: stringValue(item.domain_id), topic_id: stringValue(item.topic_id), weight: numberValue(item.weight), subtopic: stringValue(item.subtopic) }))
   const merged: { domain_id: string; topic_id: string; weight: number; subtopics: string[]; slots: number[] }[] = []
   raw.forEach((item, index) => {

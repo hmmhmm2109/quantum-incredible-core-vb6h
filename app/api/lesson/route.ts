@@ -31,7 +31,7 @@ Order: (1) theory explanation, (2) a guided worked example with concrete code, c
 retrieval_check: ONE short question about the lesson's core idea that is answerable in 2-3 sentences from memory. If it refers to code, put the code in the prompt itself inside a \`\`\` fence.
 transfer_exercise: ONE new situation that applies the SAME core idea of the lesson, different from the worked example (a transfer, not a review of everything). Focus on one or two subtopics, never all of them. The prompt must be self-contained: the learner cannot see anything outside it, so any code, register layout or message format you refer to must be written out in full inside the prompt (code in a \`\`\` fence, at most 15 lines), never described as "a function you are given". The learner types the answer in a text box and cannot run anything, so ask for a short written answer (about 3-6 sentences or a few corrected lines), never for compiling, running, sanitizers or files, and answerable in about 5 minutes. Use \`format\` to say what the answer should contain.
 Write 4 sections, each roughly 150-250 words, examples short.
-Explain for a learner who has never seen the term. Inside every section introduce each key term in this order: (a) a one-sentence plain-language definition with no jargon, (b) a concrete analogy or a tiny example, (c) only then the precise technical details and pitfalls. Never use a technical term before it is defined; define it on first use or point to the labeled prerequisite that covers it. Prefer short sentences and one idea per sentence, and say what a thing is for before how it works. Every listed subtopic must be covered by at least one section or bullet, and the lesson should build on the previous topic without repeating it. Use selected_depth "standard". Never mix in other topics except clearly labeled prerequisites. Do not claim production hardware safety without human review. Respond only through the required JSON schema.`
+Explain for a learner who has never seen the term. Inside every section introduce each key term in this order: (a) a one-sentence plain-language definition with no jargon, (b) a concrete analogy or a tiny example, (c) only then the precise technical details and pitfalls. Never use a technical term before it is defined; define it on first use or point to the labeled prerequisite that covers it. Prefer short sentences and one idea per sentence, and say what a thing is for before how it works. Every listed subtopic must be covered by at least one section or bullet, and the lesson should build on the listed prerequisites (if any) without repeating them. Use selected_depth "standard". Never mix in other topics except clearly labeled prerequisites. Do not claim production hardware safety without human review. Respond only through the required JSON schema.`
 
 const PRACTICE_PROMPT = `You are the Embedded Systems Learning Coach for EmbedPath. Design ONE focused practice exercise for the given topic, to be attempted after the lesson.
 Include a prompt, constraints, small starter files, a test plan and a rubric. Provide exactly 4 staged hints with labels "conceptual nudge", "focused clue", "pseudocode or command outline", "explained solution", all with revealed=false and stages 1-4. The exercise must stay on the stated topic. Respond only through the required JSON schema.`
@@ -133,12 +133,10 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     }
 
     const prerequisites = (topic.prerequisites ?? []).map((id) => findTopic(domain.id, id)?.label ?? id)
-    const previous = domain.topics.find((entry) => entry.order === topic.order - 1)
     const topicRequest = [
       `Domain: ${domain.label} (${domain.id})`, `Topic: ${topic.label} (${topic.id})`,
       `Subtopics to cover (each at least once):\n${topic.subtopics.map((entry) => `- ${entry}`).join('\n')}`,
       `Prerequisites: ${prerequisites.length > 0 ? prerequisites.join(', ') : 'none'}`,
-      `Previous topic in the course: ${previous?.label ?? 'none (this is the first topic)'}`,
       'selected_topic_only: true',
     ].join('\n')
     const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/lecture' }) as Record<string, unknown>
