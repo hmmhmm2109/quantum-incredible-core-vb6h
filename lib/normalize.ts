@@ -8,7 +8,8 @@ export function isRecord(value: unknown): value is JsonRecord {
 export function hasOwn(value: JsonRecord, key: string) { return Object.prototype.hasOwnProperty.call(value, key) }
 export function stringValue(value: unknown, fallback = '') { return typeof value === 'string' ? value : fallback }
 export function nullableString(value: unknown) { return typeof value === 'string' || value === null ? value : null }
-export function numberValue(value: unknown, fallback = 0) { return typeof value === 'number' && Number.isFinite(value) ? value : fallback }
+// Postgres `numeric` columns (score, confidence, deltas) reach the browser as strings such as "40"; accept those as numbers.
+export function numberValue(value: unknown, fallback = 0) { const parsed = typeof value === 'string' && value.trim() !== '' ? Number(value) : value; return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : fallback }
 export function nullableNumber(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : value === null ? null : null }
 export function recordValue(value: unknown): JsonRecord { return isRecord(value) ? value : {} }
 export function arrayValue(value: unknown): unknown[] { return Array.isArray(value) ? value : [] }
