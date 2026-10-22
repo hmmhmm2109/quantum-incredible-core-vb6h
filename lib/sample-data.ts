@@ -60,9 +60,9 @@ export const SAMPLE_FOCUS_TOPIC: Record<string, string> = { c: 'pointers-bounds'
 export const sampleFocusTopicId = (domainId: string) => { const id = SAMPLE_FOCUS_TOPIC[domainId]; return id && findTopic(domainId, id) ? id : '' }
 
 export const SAMPLE_ATTEMPTS: HomeAttempt[] = [
-  { id: 'sample-tcp', title: 'Trace a failed TCP handshake', meta: 'Networking · Scenario', status: 'Passed', duration: '18 min', isReal: false },
-  { id: 'sample-raii', title: 'Review unsafe ownership', meta: 'C++ · Code review', status: 'Retry', duration: '22 min', isReal: false },
-  { id: 'sample-boot', title: 'Read a bootloader handoff trace', meta: 'BSP · Log analysis', status: 'Passed', duration: '14 min', isReal: false },
+  { id: 'sample-tcp', title: 'Trace a failed TCP handshake', chip: 'Networking', meta: 'Scenario', status: 'Passed', tone: 'good', scoreLabel: null, when: 'example', whenFull: '', isReal: false },
+  { id: 'sample-raii', title: 'Review unsafe ownership', chip: 'C++', meta: 'Code review', status: 'Partial', tone: 'warn', scoreLabel: null, when: 'example', whenFull: '', isReal: false },
+  { id: 'sample-boot', title: 'Read a bootloader handoff trace', chip: 'BSP', meta: 'Log analysis', status: 'Passed', tone: 'good', scoreLabel: null, when: 'example', whenFull: '', isReal: false },
 ]
 
 export const SAMPLE_RECOMMENDATION: HomeRecommendation = {
