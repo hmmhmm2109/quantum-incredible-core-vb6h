@@ -17,15 +17,26 @@ export type HomeDomain = {
   confidence: number
   focus: string
   caption?: string
+  assessedCount?: number
+  totalCount?: number
+  assessedAverage?: number | null
+  provisional?: boolean
+  weakest?: { label: string; score: number } | null
   isReal: boolean
 }
+
+export type HomeOverall = { score: number; level: string; assessedCount: number; totalCount: number; provisional: boolean }
 
 export type HomeAttempt = {
   id: string
   title: string
+  chip: string
   meta: string
   status: string
-  duration: string
+  tone: 'good' | 'warn' | 'neutral'
+  scoreLabel: string | null
+  when: string
+  whenFull: string
   isReal: boolean
 }
 
@@ -50,6 +61,7 @@ type HomeSectionProps = {
   displayName: string
   dateLabel: string
   domains: HomeDomain[]
+  overall?: HomeOverall | null
   attempts: HomeAttempt[]
   recommendation: HomeRecommendation
   sampleData: boolean
@@ -91,6 +103,7 @@ export default function HomeSection({
   displayName,
   dateLabel,
   domains,
+  overall,
   attempts,
   recommendation,
   sampleData,
@@ -226,16 +239,24 @@ export default function HomeSection({
                     <span className="font-semibold">{domain.label}</span>
                     <span className={`text-xs font-medium ${levelTone[domain.level] ?? 'text-muted-foreground'}`}>{formatLevel(domain.level)}</span>
                   </div>
-                  {domain.caption && <div className="text-xs text-muted-foreground">{domain.caption}</div>}
+                  {domain.totalCount !== undefined ? (
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      <Badge variant="outline" className="rounded-full font-normal"><span>{`Assessed ${domain.assessedCount ?? 0} of ${domain.totalCount}`}</span></Badge>
+                      {domain.provisional && <Badge variant="secondary" className="rounded-full font-normal"><span>{`Provisional · ${domain.assessedCount} of ${domain.totalCount} assessed`}</span></Badge>}
+                    </div>
+                  ) : domain.caption && <div className="text-xs text-muted-foreground">{domain.caption}</div>}
                   <div className="flex items-center gap-3">
                     <Progress value={boundedScore} className="h-2 flex-1" aria-label={`${domain.label} ${boundedScore}%`} />
                     <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{boundedScore}%</span>
                   </div>
+                  {domain.weakest && <div className="text-xs text-muted-foreground"><span>{`Weakest: ${domain.weakest.label} ${domain.weakest.score}%`}</span>{domain.assessedAverage != null && <span>{` · Assessed average ${domain.assessedAverage}%`}</span>}</div>}
                 </div>
               )
             }) : (
               <div className="rounded-2xl bg-muted/60 p-4 text-sm text-muted-foreground">Your first diagnostic will create topic-level evidence across all enabled packs.</div>
             )}
+            {overall && overall.assessedCount > 0 && <div className="rounded-2xl bg-muted/60 p-3 text-xs leading-5 text-muted-foreground"><span className="font-semibold text-foreground">{`Overall ${overall.level} · ${overall.score}%`}</span><span>{` across all ${overall.totalCount} topics (${overall.assessedCount} assessed).`}</span></div>}
+            {domains.some((domain) => domain.totalCount !== undefined) && <p className="text-xs leading-5 text-muted-foreground">Level is the average across all topics in a domain; unassessed topics count as 0.</p>}
             <Button onClick={onOpenSkillMap} variant="outline" className="mt-1 min-h-11 w-full gap-2 rounded-xl active:scale-[0.98] transition-transform">
               Inspect skill map <ArrowRight className="h-4 w-4" />
             </Button>
@@ -258,15 +279,15 @@ export default function HomeSection({
                 {attempts.slice(0, 5).map((attempt) => (
                   <div key={attempt.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-start gap-3">
-                      <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full ${attempt.status === 'Passed' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'}`}>
-                        {attempt.status === 'Passed' ? <CheckCircle2 className="h-4 w-4" /> : <Code2 className="h-4 w-4" />}
+                      <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full ${attempt.tone === 'good' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : attempt.tone === 'warn' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'bg-muted text-muted-foreground'}`}>
+                        {attempt.tone === 'good' ? <CheckCircle2 className="h-4 w-4" /> : <Code2 className="h-4 w-4" />}
                       </span>
                       <div className="min-w-0">
-                        <div className="truncate font-medium">{attempt.title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{attempt.meta}</span>{!attempt.isReal && <Badge variant="outline" className="rounded-full px-2 py-0 text-[10px]">Example</Badge>}</div>
+                        <div className="line-clamp-2 font-medium" title={attempt.title}>{attempt.title}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px] font-normal">{attempt.chip}</Badge><span>{attempt.meta}</span>{!attempt.isReal && <Badge variant="outline" className="rounded-full px-2 py-0 text-[10px]">Example</Badge>}</div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-5 pl-11 text-sm sm:pl-0"><span className={attempt.status === 'Passed' ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'font-semibold text-amber-700 dark:text-amber-400'}>{attempt.status}</span><span className="font-mono text-xs tabular-nums text-muted-foreground">{attempt.duration}</span></div>
+                    <div className="flex items-center gap-4 pl-11 text-sm sm:pl-0"><span className={`font-semibold ${attempt.tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : attempt.tone === 'warn' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>{attempt.status}{attempt.scoreLabel && <span className="ml-1.5 font-mono text-xs font-normal tabular-nums">{attempt.scoreLabel}</span>}</span><span title={attempt.whenFull} className="text-xs tabular-nums text-muted-foreground">{attempt.when}</span></div>
                   </div>
                 ))}
               </div>
