@@ -61,6 +61,13 @@ Env and caveats: README "AI provider setting". `runClaudeJson` keeps its signatu
 - Home has a "Code practice" card (recommended topic = weakest assessed topic < 70, else last touched; recent code exercises; Continue/Practice again reopens the topic's newest cached exercise via openTopicPractice, since attempts only store the lesson activity id). Assessment results no longer offer "Retry without hints" (it opened the code workspace); practice results keep "Retry this exercise".
 - Deferred: per-question time is not recorded (`response_time_ms` is 0); the History assessment list filters client-side over loaded pages; Home "Recent attempts" titles are long prompts (pre-existing).
 
+## Multi-topic code practice
+- Picker: `app/sections/practice-topic-picker.tsx` (view `practice-setup`) on the shared `app/sections/topic-multiselect.tsx` (also used by the assessment picker). Cap 4 topics. Selection in localStorage `embedpath.practice-picker.v1`, per-topic queue in `embedpath.practice-queue.v1` (UI convenience only).
+- Integrated mode: `POST /api/lesson {part:'practice', topics, next?, cached_only?}` (`handleMultiPractice`, schema `MULTI_PRACTICE_SCHEMA`, ~45 s with Copilot). Cache row belongs to the FIRST topic in taxonomy order, kind `multi:<hash>` / `multi:<hash>:<n>` (hash = order-independent 14-hex cyrb53 of the topic set, `lib/practice-multi.ts`). The kind does not start with `practice`, so single-topic lookups ignore it and lecture Regenerate (deletes `practice:%`) leaves it alone; there is no UI to delete multi rows.
+- Activity id `lesson-multi-<hash>[-pN]`; the attempt stores `feedback.topics` / `execution_result.topics` so History and Home show every topic (attempts without them show "Multi-topic exercise" and are not offered under Recent).
+- Per-topic mode reuses the single-topic path with a client-side queue; no server change. Mastery is NOT changed by practice (unchanged).
+- Check: `npx tsx scripts/check-practice-multi.ts`.
+
 ## Open work / next steps (priority order)
 
 1. **Questions are written one ahead (implemented, unverified in a browser).** `generateSlots` in `app/page.tsx` parks its workers until the learner has reached the slot before (`frontierRef`, `reachSlot`), so start and resume no longer write every slot at once and leaving early costs at most one unopened question. Manual retry (`retryMissing`) is eager. Check by hand: start a 5-question diagnostic and watch the log for `purpose=assessment/generate` (one call, then one more per question reached); resume a half-finished session; jump to a not-yet-written slot from the coverage panel; "Save & next" on the last written slot. `pending` still counts unwritten slots, so some "still being written" toasts now cover a slot that has not started.
