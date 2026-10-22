@@ -17,6 +17,13 @@ const obj = (properties: Record<string, Schema>): Schema => ({
   required: Object.keys(properties),
   additionalProperties: false,
 })
+// Like obj(), but the `optional` keys are not in `required` (old cached rows and the base lecture do not have them).
+const objOpt = (properties: Record<string, Schema>, optional: string[]): Schema => ({
+  type: 'object',
+  properties,
+  required: Object.keys(properties).filter((key) => !optional.includes(key)),
+  additionalProperties: false,
+})
 const arr = (items: Schema): Schema => ({ type: 'array', items })
 
 export const COACH_RESULT_SCHEMA: Schema = obj({
@@ -41,7 +48,7 @@ export const COACH_RESULT_SCHEMA: Schema = obj({
   hints: arr(obj({ stage: num, label: str, content: str, revealed: bool })),
   lecture: obj({
     selected_depth: str, estimated_duration_minutes: num, selection_reason: str, learning_objectives: strArr,
-    sections: arr(obj({ title: str, content: str, example: nstr, debugging_method: nstr })),
+    sections: arr(objOpt({ title: str, content: str, example: nstr, debugging_method: nstr, added_from_questions: strArr }, ['added_from_questions'])),
     common_failure_mode: nstr, recap: strArr,
     retrieval_check: obj({ prompt: nstr, answer_rule: nstr }),
     transfer_exercise: obj({ prompt: nstr, format: nstr }),
@@ -74,3 +81,11 @@ export const COACH_RESULT_SCHEMA: Schema = obj({
 const coachProperties = COACH_RESULT_SCHEMA.properties as Record<string, Schema>
 export const LECTURE_SCHEMA: Schema = obj({ lecture: coachProperties.lecture, learner_explanation: str })
 export const PRACTICE_SCHEMA: Schema = obj({ activity: coachProperties.activity, hints: coachProperties.hints })
+
+// The adapt call (enriched lecture) must say, for every section, which learner questions were folded into it (empty list = untouched).
+const lectureProps = (coachProperties.lecture as { properties: Record<string, Schema> }).properties
+const sectionItems = (lectureProps.sections as { items: { properties: Record<string, Schema> } }).items
+export const ADAPT_LECTURE_SCHEMA: Schema = obj({
+  lecture: obj({ ...lectureProps, sections: arr(obj(sectionItems.properties)) }),
+  learner_explanation: str,
+})

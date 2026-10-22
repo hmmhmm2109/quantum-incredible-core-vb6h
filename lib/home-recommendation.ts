@@ -1,8 +1,10 @@
-import type { HomeAttempt, HomeDomain, HomeRecommendation } from '@/app/sections/home-section'
+import type { HomeAttempt, HomeDomain, HomeOverall, HomeRecommendation } from '@/app/sections/home-section'
 import type { SkillDomain, SkillTopic } from '@/app/sections/skill-map-section'
 import type { JsonRecord, SavedState } from '@/lib/app-types'
 import { arrayValue, isRecord, numberValue, recordValue, stringValue } from '@/lib/normalize'
-import { SAMPLE_ATTEMPTS, SAMPLE_DOMAINS, SAMPLE_RECOMMENDATION } from '@/lib/sample-data'
+import { SAMPLE_ATTEMPTS, SAMPLE_DOMAINS, SAMPLE_RECOMMENDATION, sampleFocusTopicId } from '@/lib/sample-data'
+import { aggregateDomain, aggregateOverall } from '@/lib/domain-score'
+import { attemptResult, attemptView, parseActivityId } from '@/lib/attempt-view'
 import { DOMAINS, findDomain, findTopic } from '@/lib/taxonomy'
 
 // Real header stats: consecutive local days (ending today or yesterday) with a graded response or attempt, and the total of both.
@@ -19,28 +21,32 @@ export function activityStats(saved: SavedState) {
 
 // A topic_mastery row written by "Mark learned" has evidence_summary.state 'learned'; the grade route overwrites it with 'assessed'.
 export const isLearnedRow = (item: JsonRecord) => recordValue(item.evidence_summary).state === 'learned'
-// Home "Recommended next" for real data: assess the latest learned-but-unassessed topic, otherwise the next untouched topic in taxonomy order after the latest activity.
+// Home "Recommended next" for real data: assess the latest learned-but-unassessed topic, otherwise a weak/unassessed topic in the weakest domain by whole-domain score.
 export function pickRecommendation(mastery: JsonRecord[]): HomeRecommendation | null {
   if (mastery.length === 0) return null
-  const touched = new Set(mastery.map((item) => `${stringValue(item.domain_id)}/${stringValue(item.topic_id)}`))
   const latest = (rows: JsonRecord[]) => rows.reduce<JsonRecord | undefined>((best, item) => (!best || stringValue(item.updated_at) > stringValue(best.updated_at) ? item : best), undefined)
   const learned = latest(mastery.filter(isLearnedRow))
   if (learned) {
     const domain = findDomain(stringValue(learned.domain_id)); const topic = findTopic(stringValue(learned.domain_id), stringValue(learned.topic_id))
     if (domain && topic) return { title: `Assess ${topic.label}`, description: `You marked ${topic.label} as learned. A short topic assessment turns it into a rating on your skill map.`, domain: domain.label, topic: topic.label, level: 'Not rated', format: 'Assessment', duration: 5, rationale: 'Learned, but not assessed yet.', isReal: true, action: { kind: 'assess', domainId: domain.id, topicId: topic.id, label: 'Assess this topic' } }
   }
-  const last = latest(mastery)
-  const lastDomain = last ? findDomain(stringValue(last.domain_id)) : undefined
-  const lastIndex = lastDomain?.topics.findIndex((topic) => topic.id === stringValue(last?.topic_id)) ?? -1
-  const afterLast = lastDomain?.topics.slice(lastIndex + 1).find((topic) => !touched.has(`${lastDomain.id}/${topic.id}`))
-  const next = afterLast && lastDomain ? { domain: lastDomain, topic: afterLast } : DOMAINS.flatMap((domain) => domain.topics.map((topic) => ({ domain, topic }))).find(({ domain, topic }) => !touched.has(`${domain.id}/${topic.id}`))
-  if (!next) return null
-  return { title: `Learn ${next.topic.label}`, description: `Next topic in ${next.domain.label}: ${next.topic.subtopics.slice(0, 2).join('; ')}.`, domain: next.domain.label, topic: next.topic.label, level: 'Basic', format: 'Lesson', duration: 15, rationale: 'The next topic in taxonomy order that has no lesson or assessment yet.', isReal: true, action: { kind: 'learn', domainId: next.domain.id, topicId: next.topic.id, label: 'Start lesson' } }
+  // Otherwise work on the weakest domain by whole-domain score (unassessed topics count as 0): first a topic with no evidence yet (taxonomy order), else its weakest assessed topic below 70.
+  const rowOf = (domainId: string, topicId: string) => mastery.find((item) => stringValue(item.domain_id) === domainId && stringValue(item.topic_id) === topicId)
+  const isEvidence = (item: JsonRecord | undefined) => Boolean(item) && recordValue(item?.evidence_summary).state !== 'awaiting_diagnostic' && !isLearnedRow(item as JsonRecord)
+  const ranked = DOMAINS.map((domain, order) => ({ domain, order, agg: aggregateDomain(domain.topics.map((topic) => { const item = rowOf(domain.id, topic.id); return { score: item?.score, assessed: isEvidence(item) } })) })).sort((a, b) => a.agg.score - b.agg.score || a.order - b.order)
+  for (const { domain, agg } of ranked) {
+    const why = `${domain.label} is your weakest domain (${agg.score}% across all ${agg.totalCount} topics; unassessed topics count as 0).`
+    const fresh = domain.topics.find((topic) => !isEvidence(rowOf(domain.id, topic.id)) && !(rowOf(domain.id, topic.id) && isLearnedRow(rowOf(domain.id, topic.id) as JsonRecord)))
+    if (fresh) return { title: `Learn ${fresh.label}`, description: `Next topic in ${domain.label}: ${fresh.subtopics.slice(0, 2).join('; ')}.`, domain: domain.label, topic: fresh.label, level: 'Basic', format: 'Lesson', duration: 15, rationale: why, isReal: true, action: { kind: 'learn', domainId: domain.id, topicId: fresh.id, label: 'Start lesson' } }
+    const weak = domain.topics.map((topic) => ({ topic, item: rowOf(domain.id, topic.id) })).filter(({ item }) => isEvidence(item) && numberValue(item?.score) < 70).sort((a, b) => numberValue(a.item?.score) - numberValue(b.item?.score))[0]
+    if (weak) return { title: `Review ${weak.topic.label}`, description: `Your weakest assessed topic in ${domain.label} (${Math.round(numberValue(weak.item?.score))}%).`, domain: domain.label, topic: weak.topic.label, level: stringValue(weak.item?.level_band, 'Basic'), format: 'Lesson', duration: 15, rationale: why, isReal: true, action: { kind: 'learn', domainId: domain.id, topicId: weak.topic.id, label: 'Review lesson' } }
+  }
+  return null
 }
 
 export function buildHomeAttempts(sampleData: boolean, attempts: JsonRecord[]): HomeAttempt[] {
   if (sampleData) return SAMPLE_ATTEMPTS
-  return attempts.map((attempt, index) => { const feedback = recordValue(attempt.feedback); return { id: stringValue(attempt.id, `attempt-${index + 1}`), title: stringValue(feedback.title, 'Embedded systems practice'), meta: `${stringValue(feedback.domain, 'Saved attempt')} · ${stringValue(feedback.format, 'Review')}`, status: stringValue(attempt.completion_state, 'Saved') === 'completed' ? 'Passed' : 'Retry', duration: `${Math.max(1, Math.round(numberValue(attempt.hint_count) + 12))} min`, isReal: true } })
+  return [...attempts].sort((a, b) => stringValue(b.created_at).localeCompare(stringValue(a.created_at))).map((attempt, index) => ({ ...attemptView(attempt, index), isReal: true }))
 }
 
 export function buildHomeRecommendation(sampleData: boolean, mastery: JsonRecord[], recommendations: JsonRecord[]): HomeRecommendation {
@@ -54,7 +60,7 @@ export function buildHomeRecommendation(sampleData: boolean, mastery: JsonRecord
 
 // Skill Map data: sample cards, or one card per taxonomy domain built from topic_mastery rows.
 export function buildSkillDomains(sampleData: boolean, mastery: JsonRecord[]): SkillDomain[] {
-  if (sampleData) return SAMPLE_DOMAINS.map((domain) => ({ id: domain.id, label: domain.label, level: domain.level, score: domain.score, isReal: false, topics: domain.id === 'c' ? [{ id: 'types-control-flow', label: 'Types & control flow', score: 91, level: 'Advanced', confidence: 0.91, state: 'ready', detail: 'Strong evidence from output prediction and implementation tasks.', evidence: ['Explained integer conversions in two formats.', 'Passed a control-flow repair exercise.'], prerequisite: null, isReal: false }, { id: 'pointers-bounds', label: 'Pointers & bounds', score: 64, level: 'Intermediate', confidence: 0.78, state: 'active', detail: 'Bounds checks are improving; the next exercise targets validation order.', evidence: ['Strong pointer arithmetic in the last attempt.', 'Two recent misses on truncated headers.'], prerequisite: null, isReal: false }, { id: 'memory-lifetime', label: 'Memory & lifetime', score: 55, level: 'Intermediate', confidence: 0.64, state: 'ready', detail: 'Review ownership and allocation tradeoffs before concurrency.', evidence: ['Identified one leak in a code review.'], prerequisite: null, isReal: false }, { id: 'concurrency', label: 'Concurrency', score: 0, level: 'Locked', confidence: 0, state: 'locked', detail: 'Complete memory prerequisites first.', evidence: [], prerequisite: 'Complete memory & lifetime', isReal: false }] : [{ id: `${domain.id}-core`, label: domain.focus, score: domain.score, level: domain.level, confidence: domain.confidence, state: 'active', detail: `Your ${domain.label} track is ready for a focused diagnostic.`, evidence: ['Sample evidence is shown until you complete the mixed diagnostic.'], prerequisite: null, isReal: false }, { id: `${domain.id}-next`, label: domain.id === 'bsp' ? 'Board bring-up' : 'Applied diagnosis', score: Math.max(0, domain.score - 12), level: domain.level, confidence: Math.max(0.35, domain.confidence - 0.1), state: 'ready', detail: 'A related transfer task will strengthen this path.', evidence: [], prerequisite: null, isReal: false }] }))
+  if (sampleData) return SAMPLE_DOMAINS.map((domain) => ({ id: domain.id, label: domain.label, level: domain.level, score: domain.score, isReal: false, topics: domain.id === 'c' ? [{ id: 'types-control-flow', label: 'Types & control flow', score: 91, level: 'Advanced', confidence: 0.91, state: 'ready', detail: 'Strong evidence from output prediction and implementation tasks.', evidence: ['Explained integer conversions in two formats.', 'Passed a control-flow repair exercise.'], prerequisite: null, isReal: false }, { id: 'pointers-bounds', label: 'Pointers & bounds', score: 64, level: 'Intermediate', confidence: 0.78, state: 'active', detail: 'Bounds checks are improving; the next exercise targets validation order.', evidence: ['Strong pointer arithmetic in the last attempt.', 'Two recent misses on truncated headers.'], prerequisite: null, isReal: false }, { id: 'memory-lifetime', label: 'Memory & lifetime', score: 55, level: 'Intermediate', confidence: 0.64, state: 'ready', detail: 'Review ownership and allocation tradeoffs before concurrency.', evidence: ['Identified one leak in a code review.'], prerequisite: null, isReal: false }, { id: 'interrupts-concurrency', label: 'Interrupts & concurrency', score: 0, level: 'Locked', confidence: 0, state: 'locked', detail: 'Complete memory prerequisites first.', evidence: [], prerequisite: 'Complete memory & lifetime', isReal: false }] : [{ id: sampleFocusTopicId(domain.id), label: domain.focus, score: domain.score, level: domain.level, confidence: domain.confidence, state: 'active', detail: `Your ${domain.label} track is ready for a focused diagnostic.`, evidence: ['Sample evidence is shown until you complete the mixed diagnostic.'], prerequisite: null, isReal: false }, { id: findDomain(domain.id)?.topics.at(-1)?.id ?? '', label: findDomain(domain.id)?.topics.at(-1)?.label ?? 'Applied diagnosis', score: Math.max(0, domain.score - 12), level: domain.level, confidence: Math.max(0.35, domain.confidence - 0.1), state: 'ready', detail: 'A related transfer task will strengthen this path.', evidence: [], prerequisite: null, isReal: false }] }))
   // One card per taxonomy domain, topics in learning order; taxonomy topics without a mastery row show as not started.
   const rows = new Map(mastery.map((item) => [`${stringValue(item.domain_id)}/${stringValue(item.topic_id)}`, item]))
   return DOMAINS.map((domain) => {
@@ -62,23 +68,63 @@ export function buildSkillDomains(sampleData: boolean, mastery: JsonRecord[]): S
       const item = rows.get(`${domain.id}/${topic.id}`)
       if (!item) return { id: topic.id, label: topic.label, score: 0, level: 'Not started', confidence: 0, state: 'ready', detail: 'No evidence yet. Take a topic assessment to start this rating.', evidence: [], prerequisite: null, isReal: true }
       const evidenceSummary = recordValue(item.evidence_summary)
+      // The account seed writes a score-0 placeholder row per domain; it is not evidence, so it must not count as an assessed topic.
+      if (evidenceSummary.state === 'awaiting_diagnostic') return { id: topic.id, label: topic.label, score: 0, level: 'Not started', confidence: 0, state: 'ready', detail: 'No evidence yet. Take a topic assessment to start this rating.', evidence: [], prerequisite: null, isReal: true }
       if (isLearnedRow(item)) return { id: topic.id, label: topic.label, score: 0, level: 'Learned', confidence: 0, state: 'ready', detail: stringValue(evidenceSummary.recommended_focus, 'Learned, not assessed yet.'), evidence: [], prerequisite: null, isReal: true }
       const evidence = arrayValue(evidenceSummary.evidence).filter((line): line is string => typeof line === 'string')
       return { id: topic.id, label: topic.label, score: numberValue(item.score), level: stringValue(item.level_band, 'Basic'), confidence: numberValue(item.confidence), state: 'active', detail: stringValue(evidenceSummary.recommended_focus, 'No topic explanation has been recorded yet.'), evidence, prerequisite: null, isReal: true }
     })
-    const assessed = topics.filter((topic) => topic.state === 'active')
-    const score = assessed.length > 0 ? assessed.reduce((sum, topic) => sum + topic.score, 0) / assessed.length : 0
-    const level = assessed.length > 0 ? (score >= 70 ? 'Advanced' : score >= 40 ? 'Intermediate' : 'Basic') : 'Not started'
-    return { id: domain.id, label: domain.label, level, score, isReal: true, topics }
+    // Domain level = mean over ALL topics of the domain; unassessed topics (not started, awaiting_diagnostic, learned-only) count as 0 (see lib/domain-score.ts).
+    const agg = aggregateDomain(topics.map((topic) => ({ score: topic.score, assessed: topic.state === 'active' })))
+    const weakest = agg.weakestIndex >= 0 ? { label: topics[agg.weakestIndex].label, score: Math.round(topics[agg.weakestIndex].score) } : null
+    return { id: domain.id, label: domain.label, level: agg.level, score: agg.score, isReal: true, topics, assessedCount: agg.assessedCount, totalCount: agg.totalCount, assessedAverage: agg.assessedAverage, provisional: agg.provisional, weakest }
   })
 }
 
-// Home cards reuse the per-domain grouping from skillDomains: one card per domain, averaged over assessed topics.
+/** Overall level across every topic of every domain (topic-count weighted); null for sample data. */
+export function buildOverall(sampleData: boolean, skillDomains: SkillDomain[]): HomeOverall | null {
+  if (sampleData || skillDomains.length === 0) return null
+  const agg = aggregateOverall(skillDomains.map((domain) => domain.topics.map((topic) => ({ score: topic.score, assessed: topic.state === 'active' }))))
+  return { score: agg.score, level: agg.level, assessedCount: agg.assessedCount, totalCount: agg.totalCount, provisional: agg.provisional }
+}
+
+// Home cards reuse the per-domain grouping from skillDomains: one card per domain, level = whole-domain average (unassessed topics count as 0).
 export function buildHomeDomains(sampleData: boolean, skillDomains: SkillDomain[]): HomeDomain[] {
   if (sampleData) return SAMPLE_DOMAINS
   return skillDomains.map((domain) => {
     const assessed = domain.topics.filter((topic) => topic.state === 'active')
     const confidence = assessed.length > 0 ? assessed.reduce((sum, topic) => sum + topic.confidence, 0) / assessed.length : 0
-    return { id: domain.id, label: domain.label, score: domain.score, level: domain.level, confidence, focus: assessed[0]?.detail ?? '', isReal: true }
+    return { id: domain.id, label: domain.label, score: domain.score, level: domain.level, confidence, focus: assessed[0]?.detail ?? '', caption: `${assessed.length} of ${domain.topics.length} topics assessed`, assessedCount: domain.assessedCount, totalCount: domain.totalCount, assessedAverage: domain.assessedAverage, provisional: domain.provisional, weakest: domain.weakest, isReal: true }
   })
+}
+
+// ---- Code practice entry points on Home (the quiz flow has its own cards) ----
+export type PracticeTopic = { domainId: string; topicId: string; domainLabel: string; topicLabel: string; reason: string }
+export type RecentExercise = PracticeTopic & { id: string; status: 'Passed' | 'Partial' | 'Retry'; when: string; kind: 'Code exercise' | 'Transfer exercise' }
+
+const topicRefOf = (domainId: string, topicId: string) => { const domain = findDomain(domainId); const topic = findTopic(domainId, topicId); return domain && topic ? { domainId, topicId, domainLabel: domain.label, topicLabel: topic.label } : null }
+
+/** Topic for "Start a code exercise": the weakest assessed topic below 70, otherwise the topic touched last (a lesson was read or marked learned), otherwise null (the learner picks one). */
+export function pickPracticeTopic(mastery: JsonRecord[]): PracticeTopic | null {
+  const rows = mastery.filter((item) => findTopic(stringValue(item.domain_id), stringValue(item.topic_id)))
+  const assessed = rows.filter((item) => recordValue(item.evidence_summary).state === 'assessed' && numberValue(item.score) < 70).sort((a, b) => numberValue(a.score) - numberValue(b.score))
+  const pick = assessed[0] ?? rows.reduce<JsonRecord | undefined>((best, item) => (!best || stringValue(item.updated_at) > stringValue(best.updated_at) ? item : best), undefined)
+  if (!pick) return null
+  const ref = topicRefOf(stringValue(pick.domain_id), stringValue(pick.topic_id))
+  if (!ref) return null
+  return { ...ref, reason: assessed[0] ? `Your weakest assessed topic (${Math.round(numberValue(pick.score))}%).` : 'The topic you worked on last.' }
+}
+
+/** Attempt rows hold activity ids like "lesson-<domain>-<topic>" (optionally ":transfer"); resolve them against the taxonomy. */
+export function recentExercises(attempts: JsonRecord[], limit = 4): RecentExercise[] {
+  const out: RecentExercise[] = []
+  for (const attempt of [...attempts].sort((a, b) => stringValue(b.created_at).localeCompare(stringValue(a.created_at)))) {
+    const activityId = stringValue(attempt.activity_id)
+    const parsed = parseActivityId(stringValue(attempt.activity_id))
+    if (!parsed) continue
+    const result = attemptResult(attempt)
+    out.push({ id: stringValue(attempt.id), domainId: parsed.domainId, topicId: parsed.topicId, domainLabel: parsed.domainLabel, topicLabel: parsed.topicLabel, reason: '', status: result.status === 'Passed' ? 'Passed' : result.status === 'Partial' ? 'Partial' : 'Retry', when: stringValue(attempt.created_at), kind: parsed.transfer ? 'Transfer exercise' : 'Code exercise' })
+    if (out.length >= limit) break
+  }
+  return out
 }

@@ -36,6 +36,8 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
   const [transferResult, setTransferResult] = useState<TransferResult | null>(null)
   const [transferStatus, setTransferStatus] = useState<'idle' | 'grading' | 'error'>('idle')
   const [transferError, setTransferError] = useState<string | null>(null)
+  const [enriching, setEnriching] = useState<number[]>([])
+  const [enrichErrors, setEnrichErrors] = useState<Record<number, string>>({})
   const lessonRef = useRef<string | null>(null)
   const variantRef = useRef<string | null>(null) // lecture variant on screen, so the transfer exercise is graded against the same text
   const practiceReqRef = useRef(0)
@@ -48,9 +50,9 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       const response = await authFetch('/api/lesson', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const result = recordValue(await response.json().catch(() => null))
       const responseRecord = recordValue(result.response)
-      if (!response.ok || result.success !== true) throw new Error(stringValue(result.error, 'Claude CLI could not complete this request.'))
+      if (!response.ok || result.success !== true) throw new Error(stringValue(result.error, 'The AI provider could not complete this request.'))
       const normalized = normalizeCoachResult(responseRecord.result, responseRecord.metadata)
-      if (!normalized) throw new Error('Claude CLI response did not match the saved learning schema.')
+      if (!normalized) throw new Error('The AI response did not match the saved learning schema.')
       return normalized
     } finally { setActiveAgentId(null) }
   }
@@ -72,7 +74,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
     }
   }
   // action: one of the lecture variants; regenerate: drop the cached lesson and write a new one. Neither one leaves the lesson view or loses the lesson id.
-  const loadLesson = async (domainId: string, topicId: string, options: { action?: string; regenerate?: boolean } = {}) => {
+  const loadLesson = async (domainId: string, topicId: string, options: { action?: string; regenerate?: boolean; cachedOnly?: boolean } = {}) => {
     const lessonId = `lesson-${domainId}-${topicId}`
     const initial = !options.action && !options.regenerate && !(lessonRef.current === lessonId && lessonData)
     lessonRef.current = lessonId
@@ -88,7 +90,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
         if (lessonRef.current !== lessonId) return
         if (adaptedResult) { action = 'adapt'; variantRef.current = 'adapted' }
       }
-      const result = adaptedResult ?? await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'lecture', ...(options.action && { action: options.action }), ...(options.regenerate && { regenerate: true }) })
+      const result = adaptedResult ?? await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'lecture', ...(options.action && { action: options.action }), ...(options.cachedOnly && { cached_only: true }), ...(options.regenerate && { regenerate: true }) })
       if (lessonRef.current !== lessonId) return
       setLessonData(result)
       setClaudeState(fallbackClaudeFromReview(result))
@@ -97,10 +99,28 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       void loadSavedWork(domainId, topicId, variantRef.current)
     } catch (error) {
       if (lessonRef.current !== lessonId) return
-      const message = error instanceof Error ? error.message : 'Claude CLI could not be reached.'
+      const message = error instanceof Error ? error.message : 'The AI provider could not be reached.'
       if (initial) setLesson({ domainId, topicId, status: 'error', error: message, variant: null, practice: 'loading', busy: false })
       else { setLesson((current) => current && { ...current, busy: false }); toast.error(message) }
     }
+  }
+  // Rewrites ONE section of the lecture from the learner's noted gaps (POST /api/lesson action 'enrich_section'), without blocking the page.
+  // The lecture on screen switches to the stored enriched lecture, in which only the touched sections differ.
+  const enrichSection = async (domainId: string, topicId: string, sectionIndex: number) => {
+    const lessonId = `lesson-${domainId}-${topicId}`
+    if (enriching.includes(sectionIndex)) return
+    setEnriching((current) => [...current, sectionIndex]); setEnrichErrors(({ [sectionIndex]: _drop, ...rest }) => rest)
+    try {
+      const result = await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'lecture', action: 'enrich_section', section_index: sectionIndex })
+      if (lessonRef.current !== lessonId) return
+      const switched = variantRef.current !== 'adapted'
+      variantRef.current = 'adapted'
+      setLessonData(result)
+      setLesson((current) => current && current.domainId === domainId && current.topicId === topicId ? { ...current, variant: LESSON_VARIANTS.adapt } : current)
+      if (switched) void loadSavedWork(domainId, topicId, 'adapted')
+    } catch (error) {
+      if (lessonRef.current === lessonId) setEnrichErrors((current) => ({ ...current, [sectionIndex]: error instanceof Error ? error.message : 'The AI provider could not be reached.' }))
+    } finally { setEnriching((current) => current.filter((item) => item !== sectionIndex)) }
   }
   const startTopicLesson = (domainId: string, topicId: string) => {
     setAssessmentScope(null)
@@ -143,7 +163,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       const data = await withRetry(async () => {
         const response = await authFetch('/api/lesson/transfer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, domain_id: domainId, topic_id: topicId, answer, ...(variantRef.current && { variant: variantRef.current }) }) })
         const body = recordValue(await response.json().catch(() => null))
-        if (!response.ok || body.success !== true) throw new HttpError(stringValue(body.error, 'Claude CLI could not grade this answer.'), response.status)
+        if (!response.ok || body.success !== true) throw new HttpError(stringValue(body.error, 'The AI provider could not grade this answer.'), response.status)
         return body.data as unknown as TransferResult
       })
       if (lessonRef.current !== lessonId) return
@@ -151,7 +171,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       await loadSavedData()
     } catch (error) {
       if (lessonRef.current !== lessonId) return
-      setError(error instanceof Error ? error.message : 'Claude CLI could not be reached.'); setStatus('error')
+      setError(error instanceof Error ? error.message : 'The AI provider could not be reached.'); setStatus('error')
     }
   }
   const lessonRetrievalSubmit = (answer: string) => submitAnswer('retrieval', answer)
@@ -168,11 +188,11 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       lessonRef.current = null; setSelectedActivity(practice.activity); setHints(concealHints(practice.hints)); clearWorkspace(); setView('practice')
     } catch (error) {
       if (practiceReqRef.current !== request) return
-      const message = error instanceof Error ? error.message : 'Claude CLI could not be reached.'
+      const message = error instanceof Error ? error.message : 'The AI provider could not be reached.'
       setPracticeLoad({ domainId, topicId, status: 'error', error: message })
       if (!fromSkillMap) toast.error(`Could not prepare the exercise. ${message}`, { action: { label: 'Retry', onClick: () => void openTopicPractice(domainId, topicId, false, next) } })
     }
   }
 
-  return { lesson, lessonData, practiceLoad, setPracticeLoad, markingLearned, retrievalResult, retrievalStatus, retrievalError, transferResult, transferStatus, transferError, lessonRef, variantRef, practiceReqRef, loadLesson, loadLessonPractice, startTopicLesson, markLearned, lessonRetrievalSubmit, lessonTransferSubmit, openTopicPractice }
+  return { lesson, lessonData, practiceLoad, setPracticeLoad, markingLearned, retrievalResult, retrievalStatus, retrievalError, transferResult, transferStatus, transferError, lessonRef, variantRef, practiceReqRef, loadLesson, loadLessonPractice, enrichSection, enriching, enrichErrors, startTopicLesson, markLearned, lessonRetrievalSubmit, lessonTransferSubmit, openTopicPractice }
 }

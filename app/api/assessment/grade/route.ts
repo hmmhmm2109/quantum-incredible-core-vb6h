@@ -3,6 +3,7 @@ import { and, eq, sql } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
 import { assessment_items, assessment_responses, assessment_sessions, learning_events, topic_mastery } from '@/lib/db/schema'
 import { DOMAINS } from '@/lib/taxonomy'
+import { RETAKE_MODE } from '@/lib/assessment-history'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -45,7 +46,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const key = (item?.review_snapshot as { answer_key?: AnswerKey } | undefined)?.answer_key
     if (!item || !key?.correct_options?.length) return NextResponse.json({ success: false, error: 'Assessment item not found' }, { status: 404 })
 
-    const question = item.generated_question as { stem?: string; options?: string[]; type?: string; domain_id?: string; topic?: string; topic_id?: string }
+    const question = item.generated_question as { stem?: string; options?: string[]; type?: string; domain_id?: string; topic?: string; topic_id?: string; artifact?: string | null }
     const options = question.options ?? []
     const chosen = [...new Set(selected.filter((value) => options.includes(value)))]
     if (chosen.length === 0) return NextResponse.json({ success: false, error: 'Selected answers do not match this question' }, { status: 400 })
@@ -61,6 +62,8 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const topicId = question.topic_id ?? slug(question.topic ?? 'general')
     const confidence = CONFIDENCE[String(body.confidence ?? '').toLowerCase()] ?? 0.5
     const levelBand = (difficulty.score ?? 3) >= 4 ? 'Advanced' : (difficulty.score ?? 3) >= 3 ? 'Intermediate' : 'Basic'
+    const sessionRow = await scopedRepo(assessment_sessions).findOne(eq(assessment_sessions.id, item.session_id))
+    const sessionMode = sessionRow?.mode ?? 'knowledge_check'
     const justification = typeof body.justification === 'string' ? body.justification.trim() : ''
 
     const result = {
@@ -88,7 +91,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         retrieval_check: { prompt: null, answer_rule: null }, transfer_exercise: { prompt: null, format: null },
       },
       assessment: {
-        mode: 'knowledge_check', blueprint_id: item.blueprint_id, blueprint_version: item.blueprint_version,
+        mode: sessionMode, blueprint_id: item.blueprint_id, blueprint_version: item.blueprint_version,
         topic_coverage: [{ domain_id: domainId, topic_id: topicId, weight: 1 }],
         calibrated_difficulty: { score: difficulty.score ?? 3, factors: difficulty.factors ?? [] },
         difficulty_rationale: difficulty.factors ?? [], // hidden until now: it can paraphrase the answer key
@@ -101,7 +104,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       // One item is thin evidence, so confidence is capped low no matter what the learner reports.
       mastery_evidence: [{
         domain_id: domainId, topic_id: topicId, level_band: levelBand, score: Math.round(earned * 100), confidence: Math.min(confidence, 0.4),
-        evidence: [`${fullyCorrect ? 'Answered' : 'Missed'} a ${levelBand.toLowerCase()} question on ${question.topic ?? topicId}.`],
+        evidence: [`${fullyCorrect ? 'Answered' : 'Missed'} ${levelBand === 'Advanced' ? 'an' : 'a'} ${levelBand.toLowerCase()} question on ${question.topic ?? topicId}.`],
         recommended_focus: fullyCorrect ? 'Try a harder question on this topic.' : key.misconception ?? 'Review this topic and retry a similar question.',
       }],
       recommended_next_activity: {
@@ -110,7 +113,9 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         estimated_duration_minutes: 20,
       },
       learner_explanation: key.explanation ?? '',
-      claude_cli: { available: true, status: 'completed', notice: 'Claude CLI wrote this question; grading ran instantly on the server against its stored answer key.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
+      // What the Question recap card shows: the options with the learner's pick and the key (safe here: the item is graded in this same call).
+      quiz: { type: question.type ?? 'single_answer', artifact: question.artifact ?? null, options, selected: chosen, correct, confidence: ['low', 'medium', 'high'].includes(String(body.confidence ?? '').toLowerCase()) ? String(body.confidence).toLowerCase() : null },
+      claude_cli: { available: true, status: 'completed', notice: 'The AI CLI wrote this question; grading ran instantly on the server against its stored answer key.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
     }
 
     const ownerId = getCurrentUserId()
@@ -118,6 +123,8 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const evidence = result.mastery_evidence[0]
     const cap = result.assessment.mastery_impact_cap
 
+    // A 'review_retake' session re-presents earlier questions for retention: graded and stored like any other, but it never moves mastery (zero deltas, no topic_mastery write, 'assessment_review' event).
+    const review = sessionMode === RETAKE_MODE
     const stored = await getDb().transaction(async (tx) => {
       // Serialize concurrent submits of the same item so only one of them applies mastery.
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`grade:${ownerId}:${item.id}`}))`)
@@ -128,23 +135,23 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       const before = Number(current?.score ?? 0)
       const beforeConfidence = Number(current?.confidence ?? 0)
       // Move toward the evidence score in proportion to its confidence, never more than the cap.
-      const scoreDelta = Math.max(-cap.max_score_delta, Math.min(cap.max_score_delta, Math.round((evidence.score - before) * evidence.confidence)))
+      const scoreDelta = review ? 0 : Math.max(-cap.max_score_delta, Math.min(cap.max_score_delta, Math.round((evidence.score - before) * evidence.confidence)))
       const after = Math.max(0, Math.min(100, before + scoreDelta))
-      const confidenceDelta = Math.min(1 - beforeConfidence, Number((evidence.confidence * 0.25).toFixed(2)))
+      const confidenceDelta = review ? 0 : Math.min(1 - beforeConfidence, Number((evidence.confidence * 0.25).toFixed(2)))
       const bandFromScore = BANDS[after >= 70 ? 2 : after >= 40 ? 1 : 0]
       const beforeBand = Math.max(0, BANDS.indexOf(current?.level_band ?? 'Basic'))
-      const newBand = BANDS[Math.max(beforeBand - cap.max_level_band_delta, Math.min(beforeBand + cap.max_level_band_delta, BANDS.indexOf(bandFromScore)))]
+      const newBand = review ? BANDS[beforeBand] : BANDS[Math.max(beforeBand - cap.max_level_band_delta, Math.min(beforeBand + cap.max_level_band_delta, BANDS.indexOf(bandFromScore)))]
       const previous = (current?.evidence_summary as { evidence?: unknown } | undefined)?.evidence
       const summary = { state: 'assessed', evidence: [...(Array.isArray(previous) ? previous : []), ...evidence.evidence].slice(-5), recommended_focus: evidence.recommended_focus }
 
       // Stored inside the feedback JSON, so a replay returns the same before/after numbers.
-      const stamped = { ...result, mastery_delta: { before, after, delta: after - before, band_before: BANDS[beforeBand], band_after: newBand } }
+      const stamped = { ...result, ...(review && { learner_explanation: `${result.learner_explanation} (Practice retry: this answer does not change your mastery.)` }), mastery_delta: { before, after, delta: after - before, band_before: BANDS[beforeBand], band_after: newBand } }
       await tx.insert(assessment_responses).values({
         item_id: item.id, session_id: item.session_id, selected_answers: chosen, justification, response_time_ms: 0,
         partial_credit: String(result.assessment.score.earned), feedback: stamped, challenge_state: 'completed', mastery_evidence: result.mastery_evidence, owner_user_id: ownerId,
       })
-      if (current) await tx.update(topic_mastery).set({ score: String(after), level_band: newBand, confidence: String(Math.max(0, Math.min(1, Number((beforeConfidence + confidenceDelta).toFixed(2))))), evidence_summary: summary }).where(eq(topic_mastery.id, current.id))
-      else await tx.insert(topic_mastery).values({ domain_id: domainId, topic_id: topicId, pack_version: item.blueprint_version, score: String(after), level_band: newBand, confidence: String(confidenceDelta), evidence_summary: summary, owner_user_id: ownerId })
+      if (review) { /* mastery untouched */ } else if (current) await tx.update(topic_mastery).set({ score: String(after), level_band: newBand, confidence: String(Math.max(0, Math.min(1, Number((beforeConfidence + confidenceDelta).toFixed(2))))), evidence_summary: summary }).where(eq(topic_mastery.id, current.id))
+      else if (!review) await tx.insert(topic_mastery).values({ domain_id: domainId, topic_id: topicId, pack_version: item.blueprint_version, score: String(after), level_band: newBand, confidence: String(confidenceDelta), evidence_summary: summary, owner_user_id: ownerId })
       // Complete the session once every planned slot (timing_policy.plan) has a response; seed sessions without a plan are left alone.
       const [session] = await tx.select().from(assessment_sessions).where(and(eq(assessment_sessions.owner_user_id, ownerId), eq(assessment_sessions.id, item.session_id))).limit(1)
       const planned = ((session?.timing_policy as { plan?: unknown[] } | undefined)?.plan ?? []).length
@@ -153,7 +160,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         if (Number(answered?.n ?? 0) >= planned) await tx.update(assessment_sessions).set({ status: 'completed' }).where(eq(assessment_sessions.id, session.id))
       }
       await tx.insert(learning_events).values({
-        event_type: 'assessment', domain_id: domainId, topic_id: topicId, evidence: { item_id: item.id, earned: result.assessment.score.earned, mastery_evidence: result.mastery_evidence },
+        event_type: review ? 'assessment_review' : 'assessment', domain_id: domainId, topic_id: topicId, evidence: { item_id: item.id, earned: result.assessment.score.earned, mastery_evidence: result.mastery_evidence },
         score_delta: String(after - before), confidence_delta: String(confidenceDelta), owner_user_id: ownerId,
       })
       return { result: stamped, replayed: false as const, selected_answers: chosen, session_progress: await sessionProgress(tx, ownerId, item.session_id) }

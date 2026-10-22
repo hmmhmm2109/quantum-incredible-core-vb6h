@@ -1,17 +1,18 @@
 import type { HomeAttempt, HomeDomain, HomeRecommendation } from '@/app/sections/home-section'
 import type { AssessmentQuestion, PracticeActivity } from '@/app/sections/practice-section'
 import type { ClaudeState } from '@/lib/app-types'
+import { findTopic } from '@/lib/taxonomy'
 
 export const SAMPLE_ACTIVITY: PracticeActivity = {
   id: 'sample-parser-debug-01',
   domain_id: 'c',
-  topic_id: 'pointers-and-bounds',
+  topic_id: 'pointers-bounds',
   domain: 'C',
   topic: 'Repair a corrupted packet parser',
   pack_version: 'v1.0.0',
   level_band: 'Intermediate',
   format: 'debug_code',
-  prerequisites: ['c/types-and-control-flow', 'networking/packet-diagnosis'],
+  prerequisites: ['c/types-control-flow', 'networking/packet-diagnosis'],
   estimated_duration_minutes: 25,
   learning_objectives: ['Validate a fixed header before reading fields.', 'Compare a declared payload length with bytes remaining after the header.', 'Explain why zero-length payloads are valid.'],
   prompt: 'A sensor gateway intermittently crashes while parsing UDP packets. Repair the parser without changing the wire format, and explain the validation order you chose.',
@@ -51,12 +52,18 @@ export const SAMPLE_DOMAINS: HomeDomain[] = [
   { id: 'linux', label: 'Linux', score: 71, level: 'Advanced', confidence: 0.81, focus: 'Processes, signals, and debugging', isReal: false },
   { id: 'networking', label: 'Networking', score: 51, level: 'Intermediate', confidence: 0.73, focus: 'Packet diagnosis and sockets', isReal: false },
   { id: 'bsp', label: 'BSP', score: 28, level: 'Basic', confidence: 0.47, focus: 'Boot flow and device trees', isReal: false },
+  { id: 'qnx', label: 'QNX', score: 36, level: 'Foundation', confidence: 0.52, focus: 'Message passing and priorities', isReal: false },
+  { id: 'patterns', label: 'Design Patterns', score: 47, level: 'Intermediate', confidence: 0.6, focus: 'Dependency injection and state machines', isReal: false },
 ]
 
+// Real taxonomy topic each sample domain card focuses on (used for sample coverage and sample skill-map rows).
+export const SAMPLE_FOCUS_TOPIC: Record<string, string> = { c: 'pointers-bounds', cpp: 'raii-lifetime', linux: 'processes-signals', networking: 'packet-diagnosis', bsp: 'boot-sequence', qnx: 'message-passing', patterns: 'dependency-injection' }
+export const sampleFocusTopicId = (domainId: string) => { const id = SAMPLE_FOCUS_TOPIC[domainId]; return id && findTopic(domainId, id) ? id : '' }
+
 export const SAMPLE_ATTEMPTS: HomeAttempt[] = [
-  { id: 'sample-tcp', title: 'Trace a failed TCP handshake', meta: 'Networking · Scenario', status: 'Passed', duration: '18 min', isReal: false },
-  { id: 'sample-raii', title: 'Review unsafe ownership', meta: 'C++ · Code review', status: 'Retry', duration: '22 min', isReal: false },
-  { id: 'sample-boot', title: 'Read a bootloader handoff trace', meta: 'BSP · Log analysis', status: 'Passed', duration: '14 min', isReal: false },
+  { id: 'sample-tcp', title: 'Trace a failed TCP handshake', chip: 'Networking', meta: 'Scenario', status: 'Passed', tone: 'good', scoreLabel: null, when: 'example', whenFull: '', isReal: false },
+  { id: 'sample-raii', title: 'Review unsafe ownership', chip: 'C++', meta: 'Code review', status: 'Partial', tone: 'warn', scoreLabel: null, when: 'example', whenFull: '', isReal: false },
+  { id: 'sample-boot', title: 'Read a bootloader handoff trace', chip: 'BSP', meta: 'Log analysis', status: 'Passed', tone: 'good', scoreLabel: null, when: 'example', whenFull: '', isReal: false },
 ]
 
 export const SAMPLE_RECOMMENDATION: HomeRecommendation = {
@@ -77,7 +84,7 @@ export const SAMPLE_QUESTIONS: AssessmentQuestion[] = [
 export const SAMPLE_CLAUDE: ClaudeState = {
   available: true,
   status: 'ready',
-  notice: 'Claude CLI runs on the Linux host with its existing OAuth session. No Lyzr API is used for tutoring requests.',
+  notice: 'The AI CLI runs on the Linux host with its existing login. No Lyzr API is used for tutoring requests.',
   job_id: null,
   exit_code: null,
   stdout: '',
