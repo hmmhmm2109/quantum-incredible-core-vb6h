@@ -18,6 +18,7 @@ export type QuestionEvidence = {
   resolved_at?: string
   folded_at?: string // set when the gap was woven into the enriched lecture (cleared by Regenerate)
   folded_into?: string // cache kind it was folded into ('lecture:adapted')
+  folded_section_index?: number // set by the per-section enrichment: the section that was rewritten for this gap
 }
 
 export const asEvidence = (value: unknown) => value as Partial<QuestionEvidence>
@@ -28,7 +29,7 @@ export const isGapEvent = (value: unknown) => asEvidence(value).gap?.is_gap === 
 export const isNewGap = (value: unknown) => isGapEvent(value) && !asEvidence(value).folded_at && asEvidence(value).resolved !== true
 
 // Stored next to `lecture` in the topic_lessons content of the enriched lecture.
-export type AdaptedMeta = { gap_hash: string; folded_gap_ids: string[]; adapted_at: string }
+export type AdaptedMeta = { gap_hash: string; folded_gap_ids: string[]; adapted_at: string; enriched_sections?: number[]; section_hashes?: Record<string, string> }
 
 export type AdaptState = { has_adapted: boolean; new_gap_count: number; adapted_stale: boolean; folded_count: number }
 

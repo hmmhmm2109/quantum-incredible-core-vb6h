@@ -54,7 +54,7 @@ const validVariant = (variant: string | null) => variant === null || /^[a-z-]{1,
 
 const toThreadItem = (row: { id: string; evidence: unknown; created_at: Date }) => {
   const e = asEvidence(row.evidence)
-  return { id: row.id, variant: e.variant ?? null, section_index: e.section_index ?? null, section_title: e.section_title ?? null, question: e.question ?? '', answer: e.answer ?? '', gap: e.gap ?? { is_gap: false, summary: '', missing_prerequisite: null }, resolved: e.resolved === true, folded: Boolean(e.folded_at), served_by: e.served_by ?? null, created_at: row.created_at }
+  return { id: row.id, variant: e.variant ?? null, section_index: e.section_index ?? null, section_title: e.section_title ?? null, question: e.question ?? '', answer: e.answer ?? '', gap: e.gap ?? { is_gap: false, summary: '', missing_prerequisite: null }, resolved: e.resolved === true, folded: Boolean(e.folded_at), served_by: e.served_by ?? null, folded_into: e.folded_into ?? null, created_at: row.created_at }
 }
 
 export const GET = authMiddleware(async (request: NextRequest) => {
@@ -68,7 +68,7 @@ export const GET = authMiddleware(async (request: NextRequest) => {
     const rows = await db.select().from(learning_events).where(and(eq(learning_events.owner_user_id, ownerId), eq(learning_events.event_type, QUESTION_EVENT), eq(learning_events.domain_id, found.domain.id), eq(learning_events.topic_id, found.topic.id))).orderBy(asc(learning_events.created_at)).limit(200)
     const [adapted] = await db.select({ content: topic_lessons.content }).from(topic_lessons).where(and(eq(topic_lessons.domain_id, found.domain.id), eq(topic_lessons.topic_id, found.topic.id), eq(topic_lessons.kind, ADAPTED_KIND))).limit(1)
     const { state } = adaptState([...rows].reverse(), adapted ? adapted.content as { _meta?: never } : null, gapHashOf)
-    return NextResponse.json({ success: true, data: { items: rows.map(toThreadItem), open_gaps: state.new_gap_count, new_gap_count: state.new_gap_count, has_adapted: state.has_adapted, adapted_stale: state.adapted_stale, folded_count: state.folded_count } })
+    return NextResponse.json({ success: true, data: { items: rows.map(toThreadItem), open_gaps: state.new_gap_count, new_gap_count: state.new_gap_count, has_adapted: state.has_adapted, adapted_stale: state.adapted_stale, folded_count: state.folded_count, adapted_legacy: Boolean(adapted) && !(adapted?.content as { _meta?: { gap_hash?: string } } | undefined)?._meta?.gap_hash } })
   } catch (error) {
     console.error('[API] GET /api/lesson/ask error:', error)
     return NextResponse.json({ success: false, error: 'Unable to load your questions' }, { status: 500 })

@@ -36,6 +36,8 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
   const [transferResult, setTransferResult] = useState<TransferResult | null>(null)
   const [transferStatus, setTransferStatus] = useState<'idle' | 'grading' | 'error'>('idle')
   const [transferError, setTransferError] = useState<string | null>(null)
+  const [enriching, setEnriching] = useState<number[]>([])
+  const [enrichErrors, setEnrichErrors] = useState<Record<number, string>>({})
   const lessonRef = useRef<string | null>(null)
   const variantRef = useRef<string | null>(null) // lecture variant on screen, so the transfer exercise is graded against the same text
   const practiceReqRef = useRef(0)
@@ -101,6 +103,24 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
       if (initial) setLesson({ domainId, topicId, status: 'error', error: message, variant: null, practice: 'loading', busy: false })
       else { setLesson((current) => current && { ...current, busy: false }); toast.error(message) }
     }
+  }
+  // Rewrites ONE section of the lecture from the learner's noted gaps (POST /api/lesson action 'enrich_section'), without blocking the page.
+  // The lecture on screen switches to the stored enriched lecture, in which only the touched sections differ.
+  const enrichSection = async (domainId: string, topicId: string, sectionIndex: number) => {
+    const lessonId = `lesson-${domainId}-${topicId}`
+    if (enriching.includes(sectionIndex)) return
+    setEnriching((current) => [...current, sectionIndex]); setEnrichErrors(({ [sectionIndex]: _drop, ...rest }) => rest)
+    try {
+      const result = await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'lecture', action: 'enrich_section', section_index: sectionIndex })
+      if (lessonRef.current !== lessonId) return
+      const switched = variantRef.current !== 'adapted'
+      variantRef.current = 'adapted'
+      setLessonData(result)
+      setLesson((current) => current && current.domainId === domainId && current.topicId === topicId ? { ...current, variant: LESSON_VARIANTS.adapt } : current)
+      if (switched) void loadSavedWork(domainId, topicId, 'adapted')
+    } catch (error) {
+      if (lessonRef.current === lessonId) setEnrichErrors((current) => ({ ...current, [sectionIndex]: error instanceof Error ? error.message : 'The AI provider could not be reached.' }))
+    } finally { setEnriching((current) => current.filter((item) => item !== sectionIndex)) }
   }
   const startTopicLesson = (domainId: string, topicId: string) => {
     setAssessmentScope(null)
@@ -174,5 +194,5 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
     }
   }
 
-  return { lesson, lessonData, practiceLoad, setPracticeLoad, markingLearned, retrievalResult, retrievalStatus, retrievalError, transferResult, transferStatus, transferError, lessonRef, variantRef, practiceReqRef, loadLesson, loadLessonPractice, startTopicLesson, markLearned, lessonRetrievalSubmit, lessonTransferSubmit, openTopicPractice }
+  return { lesson, lessonData, practiceLoad, setPracticeLoad, markingLearned, retrievalResult, retrievalStatus, retrievalError, transferResult, transferStatus, transferError, lessonRef, variantRef, practiceReqRef, loadLesson, loadLessonPractice, enrichSection, enriching, enrichErrors, startTopicLesson, markLearned, lessonRetrievalSubmit, lessonTransferSubmit, openTopicPractice }
 }

@@ -55,3 +55,35 @@ export function stripAdded(content: Rec): Rec {
 /** True when the result needs a repair retry. */
 export const needsRepair = (report: FinalizeReport, gapCount: number, modelSections: number, baseSections: number) =>
   gapCount > 0 && (report.touched === 0 || report.qaStyle.length > 0 || modelSections < baseSections)
+
+// ---- Per-section enrichment (POST /api/lesson action 'enrich_section') ----
+
+export type EnrichedSection = { content: string; example: string | null; debugging_method: string | null; added_from_questions: string[] }
+const SECTION_FIELDS = ['content', 'example', 'debugging_method'] as const
+
+/** True when the rewritten section reads like a normal lecture: non-empty content, no Q&A phrasing, every ``` fence closed. */
+export function sectionProblems(section: Partial<EnrichedSection>): string[] {
+  const problems: string[] = []
+  if (typeof section.content !== 'string' || !section.content.trim()) problems.push('empty content')
+  for (const key of SECTION_FIELDS) {
+    const text = section[key]
+    if (typeof text !== 'string') continue
+    if (QA_STYLE.test(text)) problems.push(`${key} addresses the learner`)
+    if ((text.match(/```/g)?.length ?? 0) % 2 === 1) problems.push(`${key} has an unclosed code fence`)
+  }
+  return problems
+}
+
+/** Puts the rewritten section at `index` of the stored enriched lecture (or of the base lecture when none exists yet).
+ *  Everything else comes from `current`; stable keys (retrieval_check, transfer_exercise, objectives, depth) always come from `base` byte for byte. */
+export function spliceSection(base: Rec, current: Rec | null, index: number, baseSection: Rec, enriched: EnrichedSection): Rec {
+  const baseLecture = isRec(base.lecture) ? base.lecture : {}
+  const baseSections = sectionsOf(base)
+  const from = current && sectionsOf(current).length === baseSections.length ? current : base
+  const fromLecture = isRec(from.lecture) ? from.lecture : {}
+  const sections = sectionsOf(from).map((section) => ({ ...section }))
+  sections[index] = { ...baseSection, content: enriched.content, example: enriched.example, debugging_method: enriched.debugging_method, added_from_questions: enriched.added_from_questions }
+  const lecture: Rec = { ...fromLecture, sections }
+  for (const key of STABLE_KEYS) if (key in baseLecture) lecture[key] = baseLecture[key]
+  return { ...from, lecture }
+}
