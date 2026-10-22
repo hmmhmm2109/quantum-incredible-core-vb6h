@@ -30,8 +30,8 @@ and clients cannot overwrite it.
   npm install -g @anthropic-ai/claude-code
   claude auth status        # should report loggedIn: true
   ```
-  The CLI must be on the `PATH` of the Next.js process. The app pins it to `claude-sonnet-5-5`
-  (`CLAUDE_MODEL` in `lib/ai-cli.ts`).
+  The CLI must be on the `PATH` of the Next.js process. The model defaults to `claude-sonnet-5-5` and is configurable
+  (profile page, or env `CLAUDE_MODEL`); see "AI provider setting" below.
 - Optional: [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) as an
   alternative provider (`npm install -g @github/copilot`, then `copilot login` or set `COPILOT_GITHUB_TOKEN`).
   See "AI provider setting" below.
@@ -85,12 +85,24 @@ Profile page, "AI provider": Claude CLI or Copilot CLI, with install/auth status
 and an optional failover checkbox. The choice is saved in `learner_profiles.preferences.ai_provider`
 (`ai_failover` for the checkbox) through `GET/PUT/POST /api/settings/ai`; the server re-reads it on every AI
 call (cached 5 s). Without a saved choice, env `AI_CLI_PROVIDER` (`claude` | `copilot`, default `claude`) applies.
-`topic_lessons.model` records which provider wrote a lesson (`claude-sonnet-5-5` or `copilot:<model|auto>`).
+`topic_lessons.model` records which model wrote a lesson (`claude-sonnet-5-5`, or `copilot:<model|auto>`; the label format is unchanged).
+
+Model: one "Model" dropdown (Default, the provider's models, "Other…" for a free-text id) under the segmented control, used for every call of the selected provider (lesson, ask,
+transfer, assessment generate and judge, enrich, Test connection). Ids differ per CLI, so the value is stored per provider as
+`learner_profiles.preferences.ai_model = { claude: string|null, copilot: string|null }` and the input shows the value of the
+selected provider (a stored id missing from the list preselects "Other…"; "Default" clears it). The lists come from `lib/ai-models.ts` and are returned by `GET` as `models.<provider> = { options, source, updated_at }`. Copilot: read live from `copilot help config` (the quoted values under the `model` setting; 3s timeout, cached 10 min, `GET ?refresh=1` / "Refresh list" bypasses the cache, built-in copy as fallback; if a Copilot update changes that output format, fix `parseCopilotModels`, the fallback keeps Settings working meanwhile). Claude: the CLI has no list command, so the list is the aliases `fable`/`opus`/`sonnet`/`haiku` (the CLI resolves each to the newest model, so they never go stale) plus concrete ids; when `ANTHROPIC_API_KEY` is set the ids come live from `GET /v1/models` (server side, cached 1h), otherwise from a small built-in list. The concrete model that answered (`modelUsage` of the CLI result) is what `topic_lessons.model` records. Precedence per provider: profile > env (`CLAUDE_MODEL` /
+`COPILOT_MODEL`) > built-in default (claude: `claude-sonnet-5-5`; copilot: no `--model`, the CLI's own default). An id the account/plan does not allow fails with the CLI's error (shown by Test connection). Ids verified
+here: claude `claude-haiku-5-5`; copilot `claude-haiku-5.5` and `auto`. `PUT /api/settings/ai {"models":{"claude":"claude-haiku-5-5"}}`
+(or `{"model":"..."}` for the active provider; `null`/`""` resets); an id must match `/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/`
+(no spaces, cannot start with `-`), else 400. `GET` returns `provider`, `failover`, `availability`, `model` (stored) and
+`effective` (id + source `profile|env|default` + label). On failover the other provider uses its own stored model or default.
+A change only affects NEW generations; cached lessons keep their label until Regenerate.
 
 | Env var | Meaning |
 |---|---|
 | `AI_CLI_PROVIDER` | Default provider when the profile has no choice yet |
-| `COPILOT_MODEL` | Optional `--model` for Copilot (e.g. `claude-sonnet-5.5`, `claude-haiku-5.5`, `gpt-5.4-mini`, `auto`). Unset = Copilot's own default (it used `claude-sonnet-5.5` on the test host) |
+| `CLAUDE_MODEL` | Optional Claude model id/alias used when the profile sets none (default `claude-sonnet-5-5`). Invalid values are ignored |
+| `COPILOT_MODEL` | Optional `--model` for Copilot when the profile sets none (e.g. `claude-sonnet-5.5`, `claude-haiku-5.5`, `gpt-5.4-mini`, `auto`). Unset = Copilot's own default (it used `claude-sonnet-5.5` on the test host) |
 | `COPILOT_HOME_DIR` | Optional: passed to Copilot as `COPILOT_HOME` (its state/login dir, default `~/.copilot`) |
 | `COPILOT_GITHUB_TOKEN` | Optional Copilot auth instead of `copilot login` (`GH_TOKEN`/`GITHUB_TOKEN` also work). Never returned by the API |
 | `COPILOT_BIN` | Optional path of the copilot binary (tests) |
@@ -113,6 +125,9 @@ in an empty temp directory, in its own process group (killed as a group on timeo
 | `GET/PUT/POST /api/settings/ai` | Provider setting + availability; `POST` runs a tiny test call through a provider |
 | `POST /api/assessment/generate` | No body: starts a diagnostic (plans one slot per domain, returns question 1). `{ session_id, slot }`: writes another slot. `{ domain_id, topic_id, topic_label }`: starts a 3-question topic assessment. |
 | `POST /api/assessment/grade` | `{ item_id, selected_answers, ... }`. Grades one item against its stored answer key and returns a full review. In one transaction it also saves the `assessment_responses` row, updates `topic_mastery` (score moves toward the evidence, at most ±8 per submit; level band moves at most one step; confidence is capped) and adds a `learning_events` row. Idempotent per item (advisory lock): a repeat submit returns the saved result with `replayed: true` and applies mastery only once. |
+| `GET /api/assessment/history?limit&cursor` | Assessment history of the signed-in learner, newest first: `{session_id, mode, selection ('topic'/'custom'/'diagnostic'/'retake'), topics, title, status, started_at, completed_at, question_count, answered_count, correct_count, score_pct, mastery_changes}`; `next_cursor` for the next page. Aggregates only. Abandoned sessions show only if something was answered; seed placeholders never. `selection` comes from `timing_policy.selection`, else is inferred from the plan (1 topic = topic, one topic per domain = diagnostic). |
+| `GET /api/assessment/session?id=` | Review data of one session. Answered items carry your answer, the correct answer, outcome, explanation, misconception, difficulty rationale; unanswered items carry stem/options only (never the key). Another learner's id is a 404. |
+| `POST /api/assessment/generate { retake_session_id }` | "Retry the same questions": copies the items into a new `review_retake` session (new ids, options reshuffled, no AI call). Graded as usual but mastery is NOT touched (zero deltas, `assessment_review` event instead of `assessment`). "Retake this topic" is the normal `{topics, question_count, mode}` call (new questions). |
 | `POST /api/assessment/cleanup` | Marks the account's `in_progress` sessions older than 24 hours that have no graded response as `abandoned`. Nothing is deleted; stale sessions that already have a response are left alone. `grade` sets a session to `completed` once every planned question has a response. The app calls it on load. |
 | `POST /api/lesson` | `{ domain_id, topic_id, part: "lecture" \| "practice", action?, regenerate? }`. Cached in `topic_lessons`. `action` is `shorter`, `another-example`, `prerequisites` or `adapt` (rewrites the lecture for the learner's open gaps, latest 8, cached as `lecture:adapted`; unknown actions return 400). |
 | `POST /api/lesson/ask` | `{ domain_id, topic_id, section_index \| null, question, variant? }`. Claude answers a question about one cached lecture section (text read server-side; question max 1500 characters) and notes whether it reveals a knowledge gap. Saved as a `learning_events` row of type `question` (no migration). `GET` with the ids returns the saved Q&A, the open-gap count and whether an adapted lecture exists. |

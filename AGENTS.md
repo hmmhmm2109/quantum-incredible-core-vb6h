@@ -193,7 +193,7 @@ Reuse what exists. Do not duplicate a route, helper or provider; extend it. New 
 |--------|---------|
 | `@/lib/taxonomy` | Single source of truth for domains, topics (learning order, prerequisites, subtopics). Renaming an id orphans stored data. Views over it: `@/lib/learning-topics` (picker options), `@/lib/assessment-topics` (sub-topic pool) |
 | `@/lib/claude-cli` (= `@/lib/ai-cli`) | `runClaudeJson` (same signature for every provider), `ClaudeCliError`, `servedModel(result)` (value for `topic_lessons.model`), `modelLabel(provider)` (server only) |
-| `@/lib/ai-settings` | Active provider (`learner_profiles.preferences.ai_provider`, `ai_failover`; env default `AI_CLI_PROVIDER`), CLI availability. Edited through `/api/settings/ai` |
+| `@/lib/ai-settings` | Active provider (`learner_profiles.preferences.ai_provider`, `ai_failover`, `ai_model` = `{claude, copilot}` chosen from a dropdown or "Other…" free text, lists in `@/lib/ai-models` (Claude: CLI aliases + ids, live only with ANTHROPIC_API_KEY; Copilot: live `copilot help config`, cached 10 min, fallback copy); env default `AI_CLI_PROVIDER`), `isValidModelId`, `resolveModel` (profile > env > default), CLI availability. Edited through `/api/settings/ai` |
 | `@/lib/json-schema-lite` | Validator for the schema subset in `coach-schema.ts` (used for Copilot output) |
 | `@/lib/coach-schema` | JSON schema of the coach result passed to Claude |
 | `@/lib/single-flight` | `singleFlight(key, run)`: concurrent identical server calls share one execution |
@@ -270,7 +270,7 @@ APP_JWT_SECRET=...
 ```
 
 The `claude` CLI (and/or `copilot` when selected) must be on the server's `PATH` with a logged-in session (see README, Known limitations).
-Optional AI env vars: `AI_CLI_PROVIDER` (`claude` | `copilot`, default for new profiles), `COPILOT_MODEL`, `COPILOT_HOME_DIR`, `COPILOT_GITHUB_TOKEN` (or `GH_TOKEN`), `COPILOT_BIN`. Switch provider in the profile page ("AI provider") or `PUT /api/settings/ai {"provider":"copilot"}`.
+Optional AI env vars: `AI_CLI_PROVIDER` (`claude` | `copilot`, default for new profiles), `CLAUDE_MODEL`, `COPILOT_MODEL` (fallbacks; precedence profile `preferences.ai_model.<provider>` > env > default `claude-sonnet-5-5` / Copilot's own default), `COPILOT_HOME_DIR`, `COPILOT_GITHUB_TOKEN` (or `GH_TOKEN`), `COPILOT_BIN`. Switch provider in the profile page ("AI provider") or `PUT /api/settings/ai {"provider":"copilot"}`.
 Copilot caveats: JSON comes from the prompt (validated, one repair retry), tools are disabled with `--available-tools=none` (`--available-tools=` with an empty value does NOT disable them), personal single-user use only (Copilot ToS). Never hardcode a secret, and never prefix one with `NEXT_PUBLIC_` — that ships it to the browser.
 
 **Client-side access (if needed):**
