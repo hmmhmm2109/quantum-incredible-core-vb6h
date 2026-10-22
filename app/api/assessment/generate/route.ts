@@ -4,7 +4,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { assessment_items, assessment_sessions } from '@/lib/db/schema'
 import { ClaudeCliError, runClaudeJson } from '@/lib/claude-cli'
 import { DOMAIN_ORDER, pick, shuffle } from '@/lib/assessment-topics'
-import { needsJudge, OPTION_COUNT, validate, type RawQuestion } from '@/lib/assessment-validate'
+import { needsJudge, OPTION_COUNT, softFlags, validate, type RawQuestion } from '@/lib/assessment-validate'
+import { judgeQuestion, type JudgeVerdict } from '@/lib/assessment-judge'
 import { stripAnswerKey } from '@/lib/assessment-redact'
 import { singleFlight } from '@/lib/single-flight'
 import { findDomain, findTopic, normalizeTopicId } from '@/lib/taxonomy'
@@ -50,6 +51,10 @@ Rules for every question:
 - For single_answer exactly one option is correct; for multiple_answer two or three are correct and the stem says to select all that apply.
 - "correct_indexes" are zero-based indexes into "options". It must be unambiguously correct; verify it before answering.
 - The options are mutually exclusive answers to EXACTLY the question the stem asks. If the stem names designs or approaches, e.g. (A) and (B), the options must choose between or evaluate those named designs (e.g. "Design A: …", "Design B: …", "Neither design: …"); never ask a comparison and then offer options that only discuss one side.
+- One concept per question. The stem names the single concept being tested and states every assumption the answer depends on (e.g. "Assume schedule() returns before the worker starts and ignore data races on pending.", "Assume a single-threaded target"). Ask for a specific outcome or root cause ("Which statement correctly explains the garbage ids?", "What does the call print?"), never a vague "which diagnosis best fits / is most likely / best describes". Any "best" or "most likely" wording needs the criterion spelled out in the stem.
+- Exactly one option is correct under the stated assumptions, and no distractor may be defensible as a second correct answer. Before answering, list the alternative causes the code contains (data races, lifetime of every object the code refers to, undefined behaviour, ordering, reallocation, integer promotion) and either rule each out in the stem or remove it from the code. State lifetimes the answer relies on (e.g. "sensors outlives all callbacks").
+- Every distractor is a plausible misconception a real learner actually holds (it names a real mistake about the language, hardware or protocol), yet is refutable from the stem or the code alone. Never write a distractor that is simply false about the language or that nobody believes, or that describes a mechanism absent from the code (e.g. "the lambda is const so the mutable variable cannot be updated" when nothing is mutable); a strawman reduces the question to elimination.
+- Code in the artifact is minimal and free of unrelated bugs, extra variables and decoys. Do not let the specificity of an option give the answer away: distractors carry the same level of technical detail and the same kind of claim as the correct option.
 - Options never refer to each other ("all of the above", "both A and B", "option 2").
 - "explanation" says why the correct answer(s) are right AND why the strongest distractor is wrong for the question as the stem asks it; "misconception" names the main wrong belief the distractors exploit.
 - Design-tradeoff angle, well formed: stem "Firmware dispatches 40 commands by id: (A) a const table of function pointers, or (B) a switch statement. Which gives the safer dispatch against an out-of-range id?" with options "Design A: the table with a bounds check", "Design B: the switch with a default case", "Design A: the table without a check", "Neither: both fault on an out-of-range id" (every option answers A-vs-B).
@@ -96,31 +101,6 @@ function parseScope(body: Record<string, unknown>): Scope | null | 'invalid' {
   return { domain_id: domain, topic_id: topicId }
 }
 
-const JUDGE_SCHEMA = {
-  type: 'object',
-  properties: { coherent: { type: 'boolean' }, problem: { type: 'string' } },
-  required: ['coherent'],
-  additionalProperties: false,
-}
-
-const JUDGE_PROMPT = `You check one multiple-choice question for coherence between its stem and its options.
-Answer coherent=false (and say what is wrong in "problem", one sentence) if any option is not a direct answer to the exact question the stem asks, if the stem compares named designs but the options do not all weigh those designs, or if the keyed option does not answer the question as asked. Otherwise coherent=true. Do not judge difficulty or style.`
-
-// Extra cheap call for comparison/tradeoff stems only. A failed judge call (busy, timeout, bad output) deliberately fails open,
-// because regenerating a question that already passed the heuristics costs more than it protects; the skip is recorded in
-// validation_evidence.judge so unchecked questions can be found later.
-type JudgeResult = { problem: string | null; skipped: boolean }
-async function judgeCoherence(question: RawQuestion): Promise<JudgeResult> {
-  try {
-    const keyed = [...new Set(question.correct_indexes)].map((index) => question.options[index])
-    const verdict = (await runClaudeJson({ systemPrompt: JUDGE_PROMPT, message: JSON.stringify({ stem: question.stem, artifact: question.artifact, options: question.options, keyed_options: keyed, explanation: question.explanation }), jsonSchema: JUDGE_SCHEMA, timeoutMs: 60_000, purpose: 'assessment/judge' })) as { coherent?: boolean; problem?: string }
-    return { problem: verdict.coherent === false ? `judge: ${verdict.problem?.trim() || 'options do not answer the stem'}` : null, skipped: false }
-  } catch (error) {
-    console.warn('[assessment/generate] judge call failed, accepting the question unjudged:', error instanceof Error ? error.message : error)
-    return { problem: null, skipped: true }
-  }
-}
-
 // Only for plans stored before topics came from the taxonomy.
 const toTopicId = (topic: string) => topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
@@ -134,20 +114,27 @@ async function generateItem(sessionId: string, slot: Slot) {
   // One server-side retry, only when the model's answer is missing or fails validate() / the judge; CLI errors (busy, timeout, exit) go back to the client's retry.
   let raw: RawQuestion | undefined
   let problem: string | null = null
-  let judge: 'not_needed' | 'passed' | 'skipped' = 'not_needed'
+  let judge: Record<string, unknown> = { status: 'not_needed' }
+  let regenerated = false
   for (let attempt = 0; !raw; attempt += 1) {
-    const message = JSON.stringify(problem ? { ...request, rejected_previous_attempt: `${problem}. Fix this; the stem and the options must answer the same question.` } : request)
+    const message = JSON.stringify(problem ? { ...request, rejected_previous_attempt: `${problem}. Fix this. ${/^judge:/.test(problem) ? 'Rewrite the whole question: state the assumptions in the stem or remove the competing cause from the code, leave exactly one defensible option, and replace every implausible distractor with a misconception a real learner holds.' : 'The stem and the options must answer the same question.'}` } : request)
     const output = await runClaudeJson({ systemPrompt: SYSTEM_PROMPT, message, jsonSchema: GENERATION_SCHEMA, timeoutMs: 120_000, purpose: 'assessment/generate' })
     const candidate = (output as { questions?: RawQuestion[] }).questions?.[0]
     problem = candidate ? validate(candidate, slot) : 'question is missing'
-    judge = 'not_needed'
-    if (candidate && !problem && needsJudge(candidate.stem)) {
-      const verdict = await judgeCoherence(candidate)
+    judge = { status: 'not_needed' }
+    let soft: string | null = null
+    if (candidate && !problem && needsJudge(candidate.stem, candidate.artifact)) {
+      const verdict: JudgeVerdict = await judgeQuestion(candidate, softFlags(candidate.stem))
       problem = verdict.problem
-      judge = verdict.skipped ? 'skipped' : 'passed'
+      soft = verdict.soft_problem
+      const { problem: _p, soft_problem: _s, ...record } = verdict
+      judge = { ...record, regenerated }
     }
+    // Strawman-only findings cost one regeneration at most; the second attempt keeps the question.
+    if (!problem && soft && attempt === 0) problem = soft
     if (!problem) raw = candidate
     else if (attempt >= 1) throw new ClaudeCliError(`Generated question was rejected: ${problem}`, 502)
+    else regenerated = true
   }
 
   // Shuffle server-side so the model's position bias never leaks into the answer layout.

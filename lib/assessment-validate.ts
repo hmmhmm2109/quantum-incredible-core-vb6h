@@ -45,8 +45,21 @@ export function checkCoherence(stem: string, options: string[]): string | null {
   return null
 }
 
-// Stems worth one extra judge call: a comparison or tradeoff question is where stem and options drift apart.
-export const needsJudge = (stem: string) => hasDesignPair(stem) || /trade-?offs?|which design|best approach|which approach/i.test(stem)
+// Vague "pick the plausible one" wording: warn-level, never rejects on its own, but forces the judge pass and is passed to it.
+const VAGUE_WORDING = /\b(best fits?|best describes?|best explains?|most likely|most plausible|most probable|which diagnosis)\b/i
+
+// Warn-level flags for validate-time heuristics; they are hints for the judge, not rejections.
+export function softFlags(stem: string): string[] {
+  const flags: string[] = []
+  if (VAGUE_WORDING.test(stem) && !/\bassum(e|ing|ption)|\bignor(e|ing)\b|\bsingle-threaded\b|\bno data race/i.test(stem)) flags.push('vague "best fits / most likely" wording and the stem states no assumptions')
+  return flags
+}
+
+// Stems worth one extra judge call (stem coherence + ambiguity). Chosen to bound cost: any question that carries code or a trace
+// (the place a second defensible cause hides), a design comparison, or vague "best fits / most likely" wording. Plain recall
+// questions with no artifact skip the judge. Expect roughly one extra call for most generated questions.
+export const needsJudge = (stem: string, artifact?: string | null) =>
+  !!artifact?.trim() || hasDesignPair(stem) || /trade-?offs?|which design|best approach|which approach/i.test(stem) || VAGUE_WORDING.test(stem)
 
 export function validate(raw: RawQuestion, slot: { type: 'single_answer' | 'multiple_answer' }): string | null {
   if (!raw.stem?.trim()) return 'empty stem'
