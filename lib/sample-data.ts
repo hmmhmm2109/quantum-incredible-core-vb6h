@@ -53,10 +53,11 @@ export const SAMPLE_DOMAINS: HomeDomain[] = [
   { id: 'networking', label: 'Networking', score: 51, level: 'Intermediate', confidence: 0.73, focus: 'Packet diagnosis and sockets', isReal: false },
   { id: 'bsp', label: 'BSP', score: 28, level: 'Basic', confidence: 0.47, focus: 'Boot flow and device trees', isReal: false },
   { id: 'qnx', label: 'QNX', score: 36, level: 'Foundation', confidence: 0.52, focus: 'Message passing and priorities', isReal: false },
+  { id: 'patterns', label: 'Design Patterns', score: 47, level: 'Intermediate', confidence: 0.6, focus: 'Dependency injection and state machines', isReal: false },
 ]
 
 // Real taxonomy topic each sample domain card focuses on (used for sample coverage and sample skill-map rows).
-export const SAMPLE_FOCUS_TOPIC: Record<string, string> = { c: 'pointers-bounds', cpp: 'raii-lifetime', linux: 'processes-signals', networking: 'packet-diagnosis', bsp: 'boot-sequence', qnx: 'message-passing' }
+export const SAMPLE_FOCUS_TOPIC: Record<string, string> = { c: 'pointers-bounds', cpp: 'raii-lifetime', linux: 'processes-signals', networking: 'packet-diagnosis', bsp: 'boot-sequence', qnx: 'message-passing', patterns: 'dependency-injection' }
 export const sampleFocusTopicId = (domainId: string) => { const id = SAMPLE_FOCUS_TOPIC[domainId]; return id && findTopic(domainId, id) ? id : '' }
 
 export const SAMPLE_ATTEMPTS: HomeAttempt[] = [

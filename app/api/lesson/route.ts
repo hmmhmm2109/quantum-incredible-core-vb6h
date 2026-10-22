@@ -6,7 +6,7 @@ import { ADAPT_LECTURE_SCHEMA, LECTURE_SCHEMA, PRACTICE_SCHEMA } from '@/lib/coa
 import { attempts, learning_events, topic_lessons } from '@/lib/db/schema'
 import { ADAPTED_KIND, adaptState, asEvidence, isGapEvent, QUESTION_EVENT, type AdaptedMeta } from '@/lib/lesson-gaps'
 import { cleanAdded, finalizeAdapted, gapHashOf, needsRepair, sectionProblems, sectionsOf, spliceSection, stripAdded, type EnrichedSection } from '@/lib/lesson-adapt'
-import { findDomain, findTopic } from '@/lib/taxonomy'
+import { domainPromptHint, findDomain, findTopic } from '@/lib/taxonomy'
 import { singleFlight } from '@/lib/single-flight'
 
 export const dynamic = 'force-dynamic'
@@ -155,6 +155,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       `Domain: ${domain.label} (${domain.id})`, `Topic: ${topic.label} (${topic.id})`,
       `Subtopics to cover (each at least once):\n${topic.subtopics.map((entry) => `- ${entry}`).join('\n')}`,
       `Prerequisites: ${prerequisites.length > 0 ? prerequisites.join(', ') : 'none'}`,
+      ...(domainPromptHint(domain.id) ? [`Domain note: ${domainPromptHint(domain.id)}`] : []),
       'selected_topic_only: true',
     ].join('\n')
     const generateLecture = async () => await runClaudeJson({ systemPrompt: LECTURE_PROMPT, message: topicRequest, jsonSchema: LECTURE_SCHEMA, timeoutMs: LECTURE_TIMEOUT_MS, purpose: 'lesson/lecture' }) as Record<string, unknown>

@@ -1,9 +1,9 @@
 # EmbedPath
 
-An adaptive, practice-first tutor for embedded-systems engineers. It covers six domains
-(C, C++, Linux, Networking, BSP, QNX) and tracks a separate mastery level per domain and topic.
+An adaptive, practice-first tutor for embedded-systems engineers. It covers seven domains
+(C, C++, Linux, Networking, BSP, QNX, Design Patterns & Architecture) and tracks a separate mastery level per domain and topic.
 
-**Domain level** = the average score across ALL topics of the domain (weight 1 each; a topic that is not assessed counts as 0), banded <40 Basic, <70 Intermediate, otherwise Advanced. Home and Skill Map also show "Assessed X of M", the weakest assessed topic and the assessed-only average, and a "Provisional" badge while fewer than half the topics are assessed. The overall level is the same mean over all 83 topics. Topic-level scores and bands are unchanged. Logic: `lib/domain-score.ts`; check: `npx tsx scripts/check-domain-score.ts`.
+**Domain level** = the average score across ALL topics of the domain (weight 1 each; a topic that is not assessed counts as 0), banded <40 Basic, <70 Intermediate, otherwise Advanced. Home and Skill Map also show "Assessed X of M", the weakest assessed topic and the assessed-only average, and a "Provisional" badge while fewer than half the topics are assessed. The overall level is the same mean over all 98 topics. Topic-level scores and bands are unchanged. Logic: `lib/domain-score.ts`; check: `npx tsx scripts/check-domain-score.ts`.
 
 Everything the AI writes (assessment questions, lessons, practice exercises, coaching feedback)
 is produced by **Claude CLI running on the host machine**, using that machine's existing
@@ -162,7 +162,7 @@ lib/ai-cli.ts           AI runner: Claude CLI + Copilot CLI providers, failover 
 lib/ai-settings.ts      active provider (profile preference / env), CLI availability
 lib/json-schema-lite.ts schema subset validator for Copilot output
 lib/coach-schema.ts     JSON schemas for coach output
-lib/taxonomy.ts         single source of truth: 6 domains, 83 topics in learning order (with prerequisites), 4 sub-topics each
+lib/taxonomy.ts         single source of truth: 7 domains, 98 topics in learning order (with prerequisites), 4 sub-topics each
 lib/assessment-topics.ts  view over the taxonomy: sub-topic pool and helpers for planning a diagnostic
 lib/learning-topics.ts  view over the taxonomy: topic picker options (shared by UI and /api/lesson)
 lib/single-flight.ts    de-duplicates concurrent identical server calls

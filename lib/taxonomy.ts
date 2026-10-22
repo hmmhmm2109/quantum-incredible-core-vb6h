@@ -114,7 +114,30 @@ export const DOMAINS: TaxonomyDomain[] = [
     ['iso26262-safety', 'ISO 26262 safety concepts', ['ASIL levels and safety goals', 'hardware and software safety mechanisms', 'FMEA, fault tolerance and diagnostic coverage', 'safety element out of context and freedom from interference'], ['microkernel-architecture']],
     ['safety-availability', 'Safety & availability', ['safety-certified QNX variants and what certification does and does not cover', 'adaptive partitioning vs hypervisor isolation', 'watchdogs and the High Availability Manager', 'freedom from interference'], ['iso26262-safety', 'adaptive-partitioning', 'qnx-hypervisor']],
   ]),
+  domain('patterns', 'Design Patterns', [
+    ['design-principles', 'Design principles', ['coupling vs cohesion and how to spot each', 'SOLID: single responsibility and open/closed', 'Liskov substitution and interface segregation', 'composition over inheritance']],
+    ['dependency-injection', 'Dependency injection without heap', ['constructor injection of references or interfaces', 'template and policy-based injection (zero-cost)', 'injecting a fake for host unit tests', 'wiring in main (composition root) vs globals'], ['design-principles']],
+    ['creational-factories', 'Factories & builders', ['factory method vs simple factory', 'abstract factory for variant families (e.g. per-vehicle-variant HAL sets)', 'builder for config and message construction', 'registry and factory keyed by id'], ['dependency-injection']],
+    ['singleton-global-state', 'Singleton & global state', ['Meyers singleton and thread-safe init', 'static init order fiasco', 'singleton vs injected instance, and testability', 'hidden coupling and lifetime at shutdown'], ['design-principles']],
+    ['static-allocation-pools', 'Object pools & static allocation', ['fixed-block object pool', 'placement new into static storage', 'std::pmr or arena allocator', 'exhaustion policy and fragmentation'], ['creational-factories']],
+    ['structural-wrappers', 'Adapter, facade & proxy', ['adapter wrapping a legacy or C API', 'facade over a subsystem', 'proxy (remote, lazy, access control)', 'decorator for logging or retry'], ['design-principles']],
+    ['layering-hal-bridge', 'HAL, bridge & layering', ['bridge: abstraction vs implementation', 'HAL and driver interface with ops table (C idiom)', 'compile-time vs runtime backend selection', 'port and adapter, and a mock layer for tests'], ['structural-wrappers']],
+    ['behavioral-core', 'Strategy, template method & command', ['strategy as virtual, template or function pointer (C idiom)', 'template method vs strategy', 'command and undo/queueing', 'callbacks, std::function and its heap cost'], ['design-principles']],
+    ['state-machines', 'State machines', ['enum and switch FSM vs State pattern (C idiom)', 'hierarchical states and entry/exit actions', 'event-driven transitions and guards', 'testing and logging transitions'], ['behavioral-core']],
+    ['observer-pubsub', 'Observer & publish/subscribe', ['observer and subscription lifetime (dangling observers)', 'synchronous vs queued notification', 'reentrancy and notification during unsubscribe', 'topic-based pub/sub in-process'], ['behavioral-core']],
+    ['traversal-composite-visitor', 'Composite, visitor, iterator & chain', ['composite for tree structures', 'iterator and range abstractions', 'visitor vs std::variant/std::visit', 'chain of responsibility (message handlers)'], ['behavioral-core']],
+    ['event-driven-concurrency', 'Event loop, active object & queues', ['reactor and event loop', 'active object and actor model', 'producer-consumer with a bounded ring buffer', 'double buffering and lock-free SPSC'], ['state-machines', 'observer-pubsub']],
+    ['resilience-patterns', 'Error handling & resilience', ['error-handling policy (codes, expected, fail-fast)', 'RAII guards for lock, power and handle', 'watchdog and supervisor', 'retry, backoff, circuit breaker and graceful degradation'], ['event-driven-concurrency']],
+    ['vehicle-architecture', 'Architecture patterns for vehicle software', ['layered vs hexagonal architecture', 'service-oriented (SOME/IP, request/response vs event vs field)', 'DDS and MQTT pub/sub with QoS', 'plugin architecture and AUTOSAR Adaptive concepts'], ['resilience-patterns', 'layering-hal-bridge']],
+    ['anti-patterns-refactoring', 'Anti-patterns & refactoring', ['god object and spaghetti control flow', 'global state and hidden coupling', 'premature abstraction and over-engineering', 'refactoring toward a pattern safely under tests'], ['vehicle-architecture']],
+  ]),
 ]
+
+// Per-domain prompt hint (generic, only where a domain needs a default). Used by the lesson, practice and assessment prompts.
+const DOMAIN_PROMPT_HINTS: Record<string, string> = {
+  patterns: 'Code examples are C++17 unless the subtopic says otherwise; mark a C idiom explicitly when it is the point.',
+}
+export const domainPromptHint = (domainId: string): string | undefined => DOMAIN_PROMPT_HINTS[domainId]
 
 export const DOMAIN_IDS = DOMAINS.map((entry) => entry.id)
 

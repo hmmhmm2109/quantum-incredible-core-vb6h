@@ -8,7 +8,7 @@ import { needsJudge, OPTION_COUNT, softFlags, validate, type RawQuestion } from 
 import { judgeQuestion, type JudgeVerdict } from '@/lib/assessment-judge'
 import { stripAnswerKey } from '@/lib/assessment-redact'
 import { singleFlight } from '@/lib/single-flight'
-import { findDomain, findTopic, normalizeTopicId } from '@/lib/taxonomy'
+import { domainPromptHint, findDomain, findTopic, normalizeTopicId } from '@/lib/taxonomy'
 import { ANGLES, buildCustomPlan, parseSelection, type Slot } from '@/lib/assessment-plan'
 import { deriveSelection, RETAKE_MODE, topicsOf } from '@/lib/assessment-history'
 
@@ -121,6 +121,7 @@ async function generateItem(sessionId: string, slot: Slot, opts: { avoid?: strin
   const request = {
     nonce: crypto.randomUUID(),
     instruction: 'Write exactly one question for this slot.',
+    ...(domainPromptHint(slot.domain_id) && { domain_note: domainPromptHint(slot.domain_id) }),
     ...(earlier.length > 0 && { do_not_repeat: { note: 'Earlier questions on this topic. Write a different scenario, code fragment and angle; do not repeat or paraphrase these.', stems: earlier } }),
     slots: [{ slot: slot.slot, domain_id: slot.domain_id, topic: slot.topic_label, sub_topic: slot.topic, angle: slot.angle, difficulty: slot.difficulty, type: slot.type }],
   }

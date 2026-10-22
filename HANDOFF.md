@@ -15,7 +15,7 @@ Claude CLI or Copilot CLI (selectable, see below) on the host writes the lessons
 - Assessments graded server-side (`/api/assessment/grade`), which updates `topic_mastery` and returns `mastery_delta` feedback.
 - Resume and restart of in-progress assessment sessions.
 - Coherence checks plus an LLM judge pass for generated questions.
-- Six domains: C, C++, Linux, Networking, BSP and **QNX** (15 topics; 83 topics in total after the taxonomy expansion, see open work item 2). The diagnostic plans one question per domain. `DOMAIN_ORDER` and the grade labels derive from `lib/taxonomy.ts`.
+- Seven domains: C, C++, Linux, Networking, BSP, **QNX** and **Design Patterns** (`patterns`, "Design Patterns & Architecture", 15 topics; 98 topics in total, see open work items 2 and 8). The diagnostic plans one question per domain. `DOMAIN_ORDER` and the grade labels derive from `lib/taxonomy.ts`.
 - Hardening: `/api/claude` takes only `{ message }` (no answer key reaches a prompt); registration closes after the first account (`ALLOW_REGISTRATION=true` reopens it); 30 Claude spawns per learner per minute and 4 at once; routes log the real error and return a generic message; every spawn logs `purpose`, duration and result.
 - Lessons: lecture generation has a 240 s timeout; the transfer exercise must be self-contained and answerable in text; retrieval/transfer prompts render fenced code, lesson examples render as preformatted code.
 - Questions are written one ahead of the learner (see open work 1).
@@ -88,6 +88,7 @@ Env and caveats: README "AI provider setting". `runClaudeJson` keeps its signatu
 12. **Security leftovers.** Registration is only closed after the first account, so a second machine or user needs `ALLOW_REGISTRATION=true`. The rate limiter is in process memory (not shared across instances). Cookie is `SameSite=None; Secure` in production and mutating routes do not check `Origin` (matters only if the app runs in a cross-origin iframe). Generic CRUD routes still accept arbitrary fields on PATCH (`owner_user_id` is ignored by `scopedRepo`, but a learner can write their own `topic_mastery.score`). `access-check` fails open when `ARCHITECT_BACKEND_URL` / `APP_ID` are missing.
 13. **Legacy review view.** `app/sections/result-section.tsx` still renders the retrieval prompt as plain text (no code fences) and belongs to the legacy path in 3.
 14. **No automated tests.** Cheapest wins: `lib/assessment-validate.ts` and `lib/rate-limit.ts` (pure functions).
+8. **Review the Design Patterns content (new, unreviewed).** The 15 `patterns` topics in `lib/taxonomy.ts` are written from general knowledge (C++17 primary, `C idiom` noted). The `vehicle-architecture` topic (SOME/IP request/response, event and field, DDS and MQTT QoS, AUTOSAR Adaptive) and the vehicle-variant HAL examples are unverified against the specs or any project architecture. Lesson/practice/assessment prompts get a one-line note (`domainPromptHint` in `lib/taxonomy.ts`) that examples are C++17 unless the subtopic says otherwise. The mixed diagnostic now asks 7 questions.
 
 ## Testing notes
 

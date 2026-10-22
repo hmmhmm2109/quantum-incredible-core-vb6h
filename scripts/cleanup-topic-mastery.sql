@@ -1,5 +1,5 @@
 -- GENERATED FILE - do not edit by hand. Regenerate with: npx tsx scripts/gen-cleanup-topic-mastery.ts
--- One-off, idempotent cleanup: remove topic_mastery rows whose (domain_id, topic_id) is not in lib/taxonomy.ts (83 topics).
+-- One-off, idempotent cleanup: remove topic_mastery rows whose (domain_id, topic_id) is not in lib/taxonomy.ts (98 topics).
 -- Not run automatically. Review the SELECT preview first, then run the DELETE (e.g. psql "$DATABASE_URL" -f scripts/cleanup-topic-mastery.sql).
 -- Regenerate whenever lib/taxonomy.ts changes.
 
@@ -87,7 +87,22 @@ WITH valid(domain_id, topic_id) AS (VALUES
     ('qnx', 'adaptive-partitioning'),
     ('qnx', 'qnx-hypervisor'),
     ('qnx', 'iso26262-safety'),
-    ('qnx', 'safety-availability')
+    ('qnx', 'safety-availability'),
+    ('patterns', 'design-principles'),
+    ('patterns', 'dependency-injection'),
+    ('patterns', 'creational-factories'),
+    ('patterns', 'singleton-global-state'),
+    ('patterns', 'static-allocation-pools'),
+    ('patterns', 'structural-wrappers'),
+    ('patterns', 'layering-hal-bridge'),
+    ('patterns', 'behavioral-core'),
+    ('patterns', 'state-machines'),
+    ('patterns', 'observer-pubsub'),
+    ('patterns', 'traversal-composite-visitor'),
+    ('patterns', 'event-driven-concurrency'),
+    ('patterns', 'resilience-patterns'),
+    ('patterns', 'vehicle-architecture'),
+    ('patterns', 'anti-patterns-refactoring')
 )
 SELECT m.* FROM topic_mastery m
 WHERE NOT EXISTS (SELECT 1 FROM valid v WHERE v.domain_id = m.domain_id AND v.topic_id = m.topic_id);
@@ -176,7 +191,22 @@ WITH valid(domain_id, topic_id) AS (VALUES
     ('qnx', 'adaptive-partitioning'),
     ('qnx', 'qnx-hypervisor'),
     ('qnx', 'iso26262-safety'),
-    ('qnx', 'safety-availability')
+    ('qnx', 'safety-availability'),
+    ('patterns', 'design-principles'),
+    ('patterns', 'dependency-injection'),
+    ('patterns', 'creational-factories'),
+    ('patterns', 'singleton-global-state'),
+    ('patterns', 'static-allocation-pools'),
+    ('patterns', 'structural-wrappers'),
+    ('patterns', 'layering-hal-bridge'),
+    ('patterns', 'behavioral-core'),
+    ('patterns', 'state-machines'),
+    ('patterns', 'observer-pubsub'),
+    ('patterns', 'traversal-composite-visitor'),
+    ('patterns', 'event-driven-concurrency'),
+    ('patterns', 'resilience-patterns'),
+    ('patterns', 'vehicle-architecture'),
+    ('patterns', 'anti-patterns-refactoring')
 )
 DELETE FROM topic_mastery m
 WHERE NOT EXISTS (SELECT 1 FROM valid v WHERE v.domain_id = m.domain_id AND v.topic_id = m.topic_id);

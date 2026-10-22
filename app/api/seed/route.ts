@@ -25,6 +25,7 @@ const domains = [
   { domain_id: 'networking', topic_id: firstTopic('networking'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map the TCP/IP layering model.' },
   { domain_id: 'bsp', topic_id: firstTopic('bsp'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map cross-compilation and toolchain fundamentals.' },
   { domain_id: 'qnx', topic_id: firstTopic('qnx'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map the QNX microkernel and message-passing model.' },
+  { domain_id: 'patterns', topic_id: firstTopic('patterns'), score: '0', level_band: 'Basic', confidence: '0', focus: 'Use the diagnostic to map coupling, cohesion and the SOLID principles.' },
 ]
 
 // Concurrent calls for one user share one run (singleFlight); the advisory lock inside the transaction also
