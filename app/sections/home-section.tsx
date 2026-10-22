@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { ArrowRight, BookOpenCheck, BrainCircuit, CheckCircle2, Clock3, Code2, Compass, FlaskConical, LockKeyhole, Sparkles, Target, TerminalSquare } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -74,6 +74,14 @@ function formatLevel(level: string) {
   return level || 'Awaiting diagnostic'
 }
 
+// Greeting from the viewer's local hour; neutral until mounted so the prerendered HTML matches the first client render.
+function greetingForHour(hour: number) {
+  if (hour >= 5 && hour < 12) return 'Good morning'
+  if (hour >= 12 && hour < 17) return 'Good afternoon'
+  if (hour >= 17 && hour < 22) return 'Good evening'
+  return 'Hello'
+}
+
 export default function HomeSection({
   displayName,
   dateLabel,
@@ -91,6 +99,8 @@ export default function HomeSection({
   onStartAssessmentTopic,
   topicActionLoading,
 }: HomeSectionProps) {
+  const [greeting, setGreeting] = useState('Welcome back')
+  useEffect(() => { setGreeting(greetingForHour(new Date().getHours())) }, [])
   const [learnDomain, setLearnDomain] = useState(domainOptions[0]?.id ?? '')
   const [learnTopic, setLearnTopic] = useState(domainOptions[0]?.topics[0]?.id ?? '')
   const [assessmentDomain, setAssessmentDomain] = useState(domainOptions[0]?.id ?? '')
@@ -108,7 +118,7 @@ export default function HomeSection({
             Adaptive practice · {dateLabel || 'Your learning desk'}
           </div>
           <div>
-            <h1 className="font-serif text-4xl tracking-tight text-balance sm:text-5xl">Good morning, {displayName}.</h1>
+            <h1 className="font-serif text-4xl tracking-tight text-balance sm:text-5xl">{greeting}, {displayName}.</h1>
             <p className="mt-3 max-w-2xl text-pretty text-base leading-7 text-muted-foreground">
               Build evidence one exercise at a time. The coach keeps each domain independent so your next challenge meets you where you are.
             </p>
@@ -133,7 +143,7 @@ export default function HomeSection({
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="rounded-3xl border-border/70 shadow-sm">
           <CardHeader><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Learn a topic</div><CardTitle className="mt-2 flex items-center gap-2 text-xl"><BookOpenCheck className="h-5 w-5 text-primary" />Theory before practice</CardTitle></CardHeader>
-          <CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">Choose one topic. Claude CLI generates the explanation, guided example, quick check, then a focused exercise.</p><div className="grid gap-3 sm:grid-cols-2"><select aria-label="Learning domain" value={learnDomain} onChange={(event) => changeLearnDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Learning topic" value={learnTopic} onChange={(event) => setLearnTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{learnTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div><Button disabled={topicActionLoading || !learnTopic} onClick={() => onStartLearningTopic(learnDomain, learnTopic)} className="min-h-11 w-full gap-2 rounded-xl"><BookOpenCheck className="h-4 w-4" />{topicActionLoading ? 'Preparing lesson…' : 'Start lesson'}</Button></CardContent>
+          <CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">Choose one topic. The AI CLI generates the explanation, guided example, quick check, then a focused exercise.</p><div className="grid gap-3 sm:grid-cols-2"><select aria-label="Learning domain" value={learnDomain} onChange={(event) => changeLearnDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Learning topic" value={learnTopic} onChange={(event) => setLearnTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{learnTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div><Button disabled={topicActionLoading || !learnTopic} onClick={() => onStartLearningTopic(learnDomain, learnTopic)} className="min-h-11 w-full gap-2 rounded-xl"><BookOpenCheck className="h-4 w-4" /><span>{topicActionLoading ? 'Preparing lesson…' : 'Start lesson'}</span></Button></CardContent>
         </Card>
         <Card className="rounded-3xl border-border/70 shadow-sm">
           <CardHeader><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Assess one topic</div><CardTitle className="mt-2 flex items-center gap-2 text-xl"><Target className="h-5 w-5 text-primary" />Topic-only assessment</CardTitle></CardHeader>
