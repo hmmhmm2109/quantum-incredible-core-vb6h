@@ -197,9 +197,6 @@ npx tsx scripts/gen-cleanup-topic-mastery.ts
   across several server instances.
 - **Cached lessons are generic.** A cached lesson is not adapted to the learner's level.
   Delete its row in `topic_lessons` to have Claude rewrite it.
-- **Assessment progress.** "Save & next" advances without saving that answer; each question is
-  graded when you press Submit.
 - **Cached lessons keep the prompt they were written with.** Lessons cached before the transfer-exercise
   rules changed may have a code-less or compile-and-run transfer exercise; press Regenerate on the lesson.
-- **Hardcoded UI numbers.** The header's "6 day streak" and "12 exercises" are placeholders.
 - **Lint.** `npm run lint` uses `next lint`, which Next 16 removed; run `npx eslint .` instead.

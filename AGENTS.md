@@ -245,7 +245,7 @@ Views: `home`, `practice`, `assessment`, `review`, `lesson`, `skill-map`, `histo
 
 ## Sections
 
-- `app/sections/*.tsx` — page-level sections only; keep each focused on one view or one shell concern (currently 8 files)
+- `app/sections/*.tsx` — page-level sections only; keep each focused on one view or one shell concern (currently 12 files)
 - Each: `'use client'`, typed props. View sections have one `export default function`; `app-shell.tsx` and `history-profile-section.tsx` group small related components as named exports
 - Same import rules as page.tsx (shadcn/ui, lucide-react, @/lib/*)
 - `components/` still reserved for shadcn/ui — NEVER create files there
