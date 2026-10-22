@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto'
 import { authMiddleware, getCurrentUserId, getDb } from 'lyzr-architect-pg'
 import { and, asc, eq } from 'lyzr-architect-pg/schema'
 import { NextRequest, NextResponse } from 'next/server'
-import { ClaudeCliError, runClaudeJson } from '@/lib/claude-cli'
+import { ClaudeCliError, runClaudeJson, servedModel } from '@/lib/claude-cli'
 import { learning_events, topic_lessons } from '@/lib/db/schema'
-import { asEvidence, isOpenGap, QUESTION_EVENT, type QuestionEvidence } from '@/lib/lesson-gaps'
+import { adaptState, asEvidence, ADAPTED_KIND, QUESTION_EVENT, type QuestionEvidence } from '@/lib/lesson-gaps'
+import { gapHashOf } from '@/lib/lesson-adapt'
 import { singleFlight } from '@/lib/single-flight'
 import { findDomain, findTopic } from '@/lib/taxonomy'
 
@@ -53,7 +54,7 @@ const validVariant = (variant: string | null) => variant === null || /^[a-z-]{1,
 
 const toThreadItem = (row: { id: string; evidence: unknown; created_at: Date }) => {
   const e = asEvidence(row.evidence)
-  return { id: row.id, variant: e.variant ?? null, section_index: e.section_index ?? null, section_title: e.section_title ?? null, question: e.question ?? '', answer: e.answer ?? '', gap: e.gap ?? { is_gap: false, summary: '', missing_prerequisite: null }, resolved: e.resolved === true, created_at: row.created_at }
+  return { id: row.id, variant: e.variant ?? null, section_index: e.section_index ?? null, section_title: e.section_title ?? null, question: e.question ?? '', answer: e.answer ?? '', gap: e.gap ?? { is_gap: false, summary: '', missing_prerequisite: null }, resolved: e.resolved === true, folded: Boolean(e.folded_at), served_by: e.served_by ?? null, created_at: row.created_at }
 }
 
 export const GET = authMiddleware(async (request: NextRequest) => {
@@ -65,8 +66,9 @@ export const GET = authMiddleware(async (request: NextRequest) => {
     if (!ownerId) return NextResponse.json({ success: false, error: 'Not authenticated' }, { status: 401 })
     const db = getDb()
     const rows = await db.select().from(learning_events).where(and(eq(learning_events.owner_user_id, ownerId), eq(learning_events.event_type, QUESTION_EVENT), eq(learning_events.domain_id, found.domain.id), eq(learning_events.topic_id, found.topic.id))).orderBy(asc(learning_events.created_at)).limit(200)
-    const [adapted] = await db.select({ id: topic_lessons.id }).from(topic_lessons).where(and(eq(topic_lessons.domain_id, found.domain.id), eq(topic_lessons.topic_id, found.topic.id), eq(topic_lessons.kind, 'lecture:adapted'))).limit(1)
-    return NextResponse.json({ success: true, data: { items: rows.map(toThreadItem), open_gaps: rows.filter((row) => isOpenGap(row.evidence)).length, has_adapted: Boolean(adapted) } })
+    const [adapted] = await db.select({ content: topic_lessons.content }).from(topic_lessons).where(and(eq(topic_lessons.domain_id, found.domain.id), eq(topic_lessons.topic_id, found.topic.id), eq(topic_lessons.kind, ADAPTED_KIND))).limit(1)
+    const { state } = adaptState([...rows].reverse(), adapted ? adapted.content as { _meta?: never } : null, gapHashOf)
+    return NextResponse.json({ success: true, data: { items: rows.map(toThreadItem), open_gaps: state.new_gap_count, new_gap_count: state.new_gap_count, has_adapted: state.has_adapted, adapted_stale: state.adapted_stale, folded_count: state.folded_count } })
   } catch (error) {
     console.error('[API] GET /api/lesson/ask error:', error)
     return NextResponse.json({ success: false, error: 'Unable to load your questions' }, { status: 500 })
@@ -118,7 +120,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       const evidence: QuestionEvidence = {
         kind: 'lesson_question', variant, section_index: sectionIndex, section_title: section?.title ?? null, question, answer: raw.answer,
         gap: { is_gap: isGap, summary: isGap && typeof gap.summary === 'string' ? gap.summary : '', missing_prerequisite: isGap && typeof gap.missing_prerequisite === 'string' && gap.missing_prerequisite.trim() ? gap.missing_prerequisite : null },
-        suggested_rewrite: raw.suggested_rewrite_of_section === true, resolved: false,
+        suggested_rewrite: raw.suggested_rewrite_of_section === true, served_by: servedModel(raw), resolved: false,
       }
       const [inserted] = await db.insert(learning_events).values({ event_type: QUESTION_EVENT, domain_id: domain.id, topic_id: topic.id, evidence, score_delta: '0', confidence_delta: '0', owner_user_id: ownerId }).returning({ id: learning_events.id, created_at: learning_events.created_at })
       return toThreadItem({ id: inserted.id, evidence, created_at: inserted.created_at })

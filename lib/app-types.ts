@@ -28,6 +28,6 @@ export type ClaudeState = {
 }
 
 export type LessonState = { domainId: string; topicId: string; status: 'loading' | 'ready' | 'error'; error: string | null; variant: string | null; practice: 'idle' | 'loading' | 'ready' | 'error'; busy: boolean }
-export const LESSON_VARIANTS: Record<string, string> = { shorter: 'Shorter version', 'another-example': 'Another example', prerequisites: 'Prerequisites refresher', adapt: 'Adapted to your questions' }
+export const LESSON_VARIANTS: Record<string, string> = { shorter: 'Shorter version', 'another-example': 'Another example', prerequisites: 'Prerequisites refresher', adapt: 'Enriched with your questions' }
 
 export type GeneratedAssessment = { sessionId: string; total: number; items: JsonRecord[]; coverage: { domain_id: string; topic_id: string; weight: number; subtopic?: string }[]; pending: number; missing: { slot: number; reason: string }[] }

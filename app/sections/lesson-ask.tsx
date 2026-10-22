@@ -18,6 +18,8 @@ export type LessonQuestion = {
   answer: string
   gap: { is_gap: boolean; summary: string; missing_prerequisite: string | null }
   resolved: boolean
+  folded?: boolean
+  served_by?: string | null
 }
 
 const MAX_QUESTION_CHARS = 1500
@@ -28,6 +30,8 @@ export function useLessonQuestions(domainId: string, topicId: string, reloadKey:
   const [items, setItems] = useState<LessonQuestion[]>([])
   const [openGaps, setOpenGaps] = useState(0)
   const [hasAdapted, setHasAdapted] = useState(false)
+  const [adaptedStale, setAdaptedStale] = useState(false)
+  const [foldedCount, setFoldedCount] = useState(0)
   useEffect(() => {
     let current = true
     void (async () => {
@@ -35,7 +39,7 @@ export function useLessonQuestions(domainId: string, topicId: string, reloadKey:
         const response = await authFetch(`/api/lesson/ask?domain_id=${domainId}&topic_id=${topicId}`)
         const body = await response.json().catch(() => null)
         if (!current || !response.ok || body?.success !== true) return
-        setItems(body.data.items); setOpenGaps(body.data.open_gaps); setHasAdapted(body.data.has_adapted)
+        setItems(body.data.items); setOpenGaps(body.data.new_gap_count ?? body.data.open_gaps ?? 0); setHasAdapted(body.data.has_adapted); setAdaptedStale(body.data.adapted_stale === true); setFoldedCount(body.data.folded_count ?? 0)
       } catch { /* saved questions are optional; asking a new one still works */ }
     })()
     return () => { current = false }
@@ -47,17 +51,18 @@ export function useLessonQuestions(domainId: string, topicId: string, reloadKey:
     if (!response.ok || body?.success !== true) throw new Error(typeof body?.error === 'string' ? body.error : 'The AI provider could not answer this question.')
     const item = body.data as LessonQuestion
     setItems((current) => current.some((entry) => entry.id === item.id) ? current : [...current, item])
-    if (item.gap.is_gap) setOpenGaps((count) => count + 1)
+    if (item.gap.is_gap) { setOpenGaps((count) => count + 1); setAdaptedStale(true) }
   }, [authFetch, domainId, topicId])
-  return { items, openGaps, hasAdapted, ask }
+  return { items, openGaps, hasAdapted, adaptedStale, foldedCount, ask }
 }
 
 export function QuestionThread({ items, render }: { items: LessonQuestion[]; render: (text: string) => ReactNode }) {
   if (items.length === 0) return null
   return <div className="space-y-3" aria-label="Your questions">{items.map((item) => <div key={item.id} className="space-y-2 rounded-xl border border-border/70 bg-background p-3">
-    <div className="flex flex-wrap items-start gap-2"><p className="min-w-0 flex-1 text-sm font-medium leading-6">{item.question}</p>{item.gap.is_gap && <Badge variant="outline" className="rounded-full border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-300"><span>{item.resolved ? 'Gap noted · applied' : 'Gap noted'}</span></Badge>}</div>
+    <div className="flex flex-wrap items-start gap-2"><p className="min-w-0 flex-1 text-sm font-medium leading-6">{item.question}</p>{item.gap.is_gap && <Badge variant="outline" className="rounded-full border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-300"><span>{item.folded || item.resolved ? 'Gap noted · in lesson' : 'Gap noted'}</span></Badge>}</div>
     <div className="text-muted-foreground">{render(item.answer)}</div>
-    {item.gap.is_gap && item.gap.summary && <p className="text-xs text-muted-foreground"><span className="font-semibold text-foreground">What was unclear:</span> {item.gap.summary}{item.gap.missing_prerequisite && <> Missing background: {item.gap.missing_prerequisite}.</>}</p>}
+    {item.served_by && <div className="font-mono text-[10px] text-muted-foreground/80">Answered by {item.served_by}</div>}
+    {item.gap.is_gap && item.gap.summary && <div className="space-y-1 text-xs text-muted-foreground"><div className="font-semibold text-foreground">What was unclear:</div>{render(item.gap.summary)}{item.gap.missing_prerequisite && <p>Missing background: {item.gap.missing_prerequisite}.</p>}</div>}
   </div>)}</div>
 }
 
@@ -91,12 +96,13 @@ export function AskBox({ title, sectionIndex, variant, ask, prefill, onPrefilled
   </div>
 }
 
-// Offers the lecture rewrite once there is at least one open gap, or a way back to the adapted lecture.
-export function AdaptBar({ openGaps, hasAdapted, showingAdapted, busy, onAdapt }: { openGaps: number; hasAdapted: boolean; showingAdapted: boolean; busy: boolean; onAdapt: () => void }) {
-  if (openGaps === 0 && (!hasAdapted || showingAdapted)) return null
+// Offers to fold the NEW unclear points (gaps not yet in the enriched lecture) into the lesson; after that the banner disappears.
+export function AdaptBar({ newGaps, hasAdapted, busy, onAdapt }: { newGaps: number; hasAdapted: boolean; busy: boolean; onAdapt: () => void }) {
+  const ai = useAiProvider()
+  if (newGaps === 0 && !busy) return null
   return <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm" role="status">
-    <CircleAlert className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />
-    <span className="min-w-[12rem] flex-1">{openGaps > 0 ? `${openGaps} unclear ${openGaps === 1 ? 'point' : 'points'} from your questions can be folded into this lesson.` : 'You have a version of this lesson adapted to your questions.'}</span>
-    <Button onClick={onAdapt} disabled={busy} variant="outline" size="sm" className="min-h-10 gap-2 rounded-xl"><RefreshCw className="h-4 w-4" />{openGaps > 0 ? 'Update lesson with my questions' : 'Show adapted'}</Button>
+    {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-700 dark:text-amber-400" /> : <CircleAlert className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />}
+    <span className="min-w-[12rem] flex-1">{busy ? `${ai.short} is working your questions into the lesson, this can take a minute or two.` : `${newGaps} new unclear ${newGaps === 1 ? 'point' : 'points'} can be added to this lesson.`}</span>
+    <Button onClick={onAdapt} disabled={busy} variant="outline" size="sm" className="min-h-10 gap-2 rounded-xl"><RefreshCw className="h-4 w-4" /><span>{hasAdapted ? 'Update enriched lesson' : 'Add to lesson'}</span></Button>
   </div>
 }

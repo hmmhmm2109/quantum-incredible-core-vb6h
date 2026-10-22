@@ -72,7 +72,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
     }
   }
   // action: one of the lecture variants; regenerate: drop the cached lesson and write a new one. Neither one leaves the lesson view or loses the lesson id.
-  const loadLesson = async (domainId: string, topicId: string, options: { action?: string; regenerate?: boolean } = {}) => {
+  const loadLesson = async (domainId: string, topicId: string, options: { action?: string; regenerate?: boolean; cachedOnly?: boolean } = {}) => {
     const lessonId = `lesson-${domainId}-${topicId}`
     const initial = !options.action && !options.regenerate && !(lessonRef.current === lessonId && lessonData)
     lessonRef.current = lessonId
@@ -88,7 +88,7 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
         if (lessonRef.current !== lessonId) return
         if (adaptedResult) { action = 'adapt'; variantRef.current = 'adapted' }
       }
-      const result = adaptedResult ?? await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'lecture', ...(options.action && { action: options.action }), ...(options.regenerate && { regenerate: true }) })
+      const result = adaptedResult ?? await fetchLesson({ domain_id: domainId, topic_id: topicId, part: 'lecture', ...(options.action && { action: options.action }), ...(options.cachedOnly && { cached_only: true }), ...(options.regenerate && { regenerate: true }) })
       if (lessonRef.current !== lessonId) return
       setLessonData(result)
       setClaudeState(fallbackClaudeFromReview(result))
