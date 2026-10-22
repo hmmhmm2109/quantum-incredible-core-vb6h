@@ -46,7 +46,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
     const key = (item?.review_snapshot as { answer_key?: AnswerKey } | undefined)?.answer_key
     if (!item || !key?.correct_options?.length) return NextResponse.json({ success: false, error: 'Assessment item not found' }, { status: 404 })
 
-    const question = item.generated_question as { stem?: string; options?: string[]; type?: string; domain_id?: string; topic?: string; topic_id?: string }
+    const question = item.generated_question as { stem?: string; options?: string[]; type?: string; domain_id?: string; topic?: string; topic_id?: string; artifact?: string | null }
     const options = question.options ?? []
     const chosen = [...new Set(selected.filter((value) => options.includes(value)))]
     if (chosen.length === 0) return NextResponse.json({ success: false, error: 'Selected answers do not match this question' }, { status: 400 })
@@ -104,7 +104,7 @@ export const POST = authMiddleware(async (request: NextRequest) => {
       // One item is thin evidence, so confidence is capped low no matter what the learner reports.
       mastery_evidence: [{
         domain_id: domainId, topic_id: topicId, level_band: levelBand, score: Math.round(earned * 100), confidence: Math.min(confidence, 0.4),
-        evidence: [`${fullyCorrect ? 'Answered' : 'Missed'} a ${levelBand.toLowerCase()} question on ${question.topic ?? topicId}.`],
+        evidence: [`${fullyCorrect ? 'Answered' : 'Missed'} ${levelBand === 'Advanced' ? 'an' : 'a'} ${levelBand.toLowerCase()} question on ${question.topic ?? topicId}.`],
         recommended_focus: fullyCorrect ? 'Try a harder question on this topic.' : key.misconception ?? 'Review this topic and retry a similar question.',
       }],
       recommended_next_activity: {
@@ -113,6 +113,8 @@ export const POST = authMiddleware(async (request: NextRequest) => {
         estimated_duration_minutes: 20,
       },
       learner_explanation: key.explanation ?? '',
+      // What the Question recap card shows: the options with the learner's pick and the key (safe here: the item is graded in this same call).
+      quiz: { type: question.type ?? 'single_answer', artifact: question.artifact ?? null, options, selected: chosen, correct, confidence: ['low', 'medium', 'high'].includes(String(body.confidence ?? '').toLowerCase()) ? String(body.confidence).toLowerCase() : null },
       claude_cli: { available: true, status: 'completed', notice: 'The AI CLI wrote this question; grading ran instantly on the server against its stored answer key.', job_id: null, exit_code: 0, stdout: '', stderr: '', changed_files: [] },
     }
 
