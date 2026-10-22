@@ -206,25 +206,22 @@ function EmbedPathApp() {
     toast.success(open ? `Resuming your assessment at question ${itemSlot(open) + 1} of ${plan.length}.` : 'Resuming your assessment. The next question is still being written.')
     if (absent.length > 0) void generateSlots(sessionId, absent)
   }
-  const startAssessment = async (scope: { domainId: string; topicId: string } | null, custom: CustomAssessmentRequest | null = null) => {
-    if (generating) return
+  // `replaceId` = "start a new assessment instead" of that unfinished session: never resume (it or a sibling), write the new set first, close the old one only once the new one exists (a failed write leaves the old one open).
+  const startAssessment = async (scope: { domainId: string; topicId: string } | null, custom: CustomAssessmentRequest | null = null, replaceId: string | null = null): Promise<boolean> => {
+    if (generating) return false
     setGenerating(true)
     const fresh = await loadAssessmentData().catch(() => null)
     const sessions = fresh?.sessions ?? saved.assessmentSessions
     const responses = fresh?.responses ?? saved.responses
-    // "Load new questions": the unfinished set for these topics is closed first (graded answers keep counting), then a new one is written.
-    if (custom?.fresh) {
-      for (const old of sessions.filter((session) => session.status === 'in_progress' && recordValue(session.timing_policy).selection === 'custom' && stringValue(session.mode) === custom.mode && sameTopicSet(sessionTopics(session), custom.topics))) {
-        abandonedRef.current.add(stringValue(old.id))
-        await authFetch('/api/assessment_sessions', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: stringValue(old.id), status: 'abandoned' }) }).catch(() => undefined)
-      }
-      void loadAssessmentData().catch(() => undefined)
-    }
-    const resumable = custom?.fresh ? undefined : findResumable(sessions, responses, scope, custom)
+    // "Load new questions" / "Start a new assessment instead" / History retake: the unfinished set(s) being replaced are closed (graded answers keep counting) after the new set exists.
+    const forceNew = Boolean(custom?.fresh || replaceId)
+    const stale = new Set<string>(replaceId ? [replaceId] : [])
+    if (custom?.fresh) for (const old of sessions.filter((session) => session.status === 'in_progress' && recordValue(session.timing_policy).selection === 'custom' && stringValue(session.mode) === custom.mode && sameTopicSet(sessionTopics(session), custom.topics))) stale.add(stringValue(old.id))
+    const resumable = forceNew ? undefined : findResumable(sessions, responses, scope, custom)
     if (resumable) {
       resumeAssessment(resumable, fresh?.items ?? saved.assessmentItems, responses, scope, custom)
       setGenerating(false)
-      return
+      return true
     }
     const toastId = toast.loading(custom ? `${getAiProviderShort()} is writing your first question…` : scope ? `${getAiProviderShort()} is writing your ${topicLabel(scope.domainId, scope.topicId)} question…` : `${getAiProviderShort()} is writing your first question…`)
     try {
@@ -234,6 +231,11 @@ function EmbedPathApp() {
       const sessionId = stringValue(session.id)
       const total = Math.max(numberValue(session.total, items.length), items.length)
       if (items.length === 0 || !sessionId) throw new Error(`${getAiProviderShort()} returned no questions.`)
+      for (const id of stale) {
+        abandonedRef.current.add(id)
+        await authFetch('/api/assessment_sessions', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, status: 'abandoned' }) }).catch(() => undefined)
+      }
+      if (stale.size > 0) void loadAssessmentData().then((data2) => setSaved((current) => ({ ...current, assessmentSessions: data2.sessions, assessmentItems: data2.items }))).catch(() => undefined)
       setGenerated({ sessionId, mode: stringValue(session.mode, 'knowledge_check'), total, items, coverage: arrayValue(session.topic_coverage).filter(isRecord).map((item) => ({ domain_id: stringValue(item.domain_id), topic_id: stringValue(item.topic_id), weight: numberValue(item.weight), subtopic: stringValue(item.subtopic) })), pending: total - 1, missing: [] })
       setAssessmentScope(scope)
       setAssessmentCustom(custom)
@@ -244,31 +246,33 @@ function EmbedPathApp() {
       toast.success(`Question 1 of ${total} is ready. The next one is written while you answer.`, { id: toastId })
       reachSlot(sessionId, 0)
       void generateSlots(sessionId, Array.from({ length: total - 1 }, (_, index) => index + 1))
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Assessment could not be generated.', { id: toastId })
+      return false
     } finally {
       setGenerating(false)
     }
   }
-  // "Start a new assessment instead": mark the resumed session abandoned (PATCH is owner-scoped; graded answers keep counting in mastery), then generate a fresh one for the same scope.
+  // "Start a new assessment instead": write a fresh set for the same scope (one topic, the custom topic list, or the mixed diagnostic, read from the resumed session), then mark the resumed session abandoned (graded answers keep counting in mastery).
+  const restartRef = useRef(false)
   const restartAssessment = async () => {
     const sessionId = resumedSessionId
-    if (!sessionId || restarting || generating) return
+    if (!sessionId || restartRef.current || generating) return
+    const old = saved.assessmentSessions.find((session) => stringValue(session.id) === sessionId)
+    const policy = recordValue(old?.timing_policy)
+    const topics = old ? sessionTopics(old) : []
+    const mode = stringValue(old?.mode) === 'domain_assessment' ? 'domain_assessment' : 'knowledge_check'
+    const custom: CustomAssessmentRequest | null = assessmentCustom ?? (policy.selection === 'custom' && topics.length > 0 ? { topics, count: Math.max(3, Math.min(10, arrayValue(policy.plan).length)), mode, fresh: false } : null)
+    const scope = custom ? null : assessmentScope ?? (topics.length === 1 ? { domainId: topics[0].domain_id, topicId: topics[0].topic_id } : null)
+    restartRef.current = true
     setRestarting(true)
     try {
-      const response = await authFetch('/api/assessment_sessions', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: sessionId, status: 'abandoned' }) })
-      const body = recordValue(await response.json().catch(() => null))
-      if (!response.ok || body.success !== true) throw new Error(stringValue(body.error, 'The assessment could not be restarted.'))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The assessment could not be restarted.')
+      await startAssessment(scope, custom, sessionId)
+    } finally {
+      restartRef.current = false
       setRestarting(false)
-      return
     }
-    abandonedRef.current.add(sessionId)
-    setSaved((current) => ({ ...current, assessmentSessions: current.assessmentSessions.filter((session) => stringValue(session.id) !== sessionId), assessmentItems: current.assessmentItems.filter((item) => stringValue(item.session_id) !== sessionId) }))
-    setResumedSessionId(null)
-    setRestarting(false)
-    await startAssessment(assessmentScope, assessmentCustom ? { ...assessmentCustom, fresh: true } : null)
   }
   const openAssessment = () => startAssessment(null)
   const openAssessmentPicker = () => { setView('assess-setup') }
