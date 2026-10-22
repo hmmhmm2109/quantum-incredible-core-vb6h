@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
+import type { PracticeTopic, RecentExercise } from '@/lib/home-recommendation'
 
 export type HomeDomain = {
   id: string
@@ -15,6 +16,7 @@ export type HomeDomain = {
   level: string
   confidence: number
   focus: string
+  caption?: string
   isReal: boolean
 }
 
@@ -60,6 +62,9 @@ type HomeSectionProps = {
   onStartLearningTopic: (domainId: string, topicId: string) => void
   onStartAssessmentTopic: (domainId: string, topicId: string) => void
   topicActionLoading: boolean
+  // Code exercises (the other activity type): recommended topic, recent attempts, and the actions that open them.
+  codePractice: { recommended: PracticeTopic | null; recent: RecentExercise[] }
+  onStartCodeExercise: (domainId: string, topicId: string) => void
 }
 
 const levelTone: Record<string, string> = {
@@ -98,6 +103,8 @@ export default function HomeSection({
   onStartLearningTopic,
   onStartAssessmentTopic,
   topicActionLoading,
+  codePractice,
+  onStartCodeExercise,
 }: HomeSectionProps) {
   const [greeting, setGreeting] = useState('Welcome back')
   useEffect(() => { setGreeting(greetingForHour(new Date().getHours())) }, [])
@@ -107,6 +114,12 @@ export default function HomeSection({
   const [assessmentTopic, setAssessmentTopic] = useState(domainOptions[0]?.topics[0]?.id ?? '')
   const learnTopics = domainOptions.find((domain) => domain.id === learnDomain)?.topics ?? []
   const assessmentTopics = domainOptions.find((domain) => domain.id === assessmentDomain)?.topics ?? []
+  const [codeDomain, setCodeDomain] = useState(codePractice.recommended?.domainId ?? domainOptions[0]?.id ?? '')
+  const [codeTopic, setCodeTopic] = useState(codePractice.recommended?.topicId ?? domainOptions[0]?.topics[0]?.id ?? '')
+  const recommendedKey = codePractice.recommended ? `${codePractice.recommended.domainId}/${codePractice.recommended.topicId}` : ''
+  useEffect(() => { if (codePractice.recommended) { setCodeDomain(codePractice.recommended.domainId); setCodeTopic(codePractice.recommended.topicId) } }, [recommendedKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const codeTopics = domainOptions.find((domain) => domain.id === codeDomain)?.topics ?? []
+  const changeCodeDomain = (value: string) => { setCodeDomain(value); setCodeTopic(domainOptions.find((domain) => domain.id === value)?.topics[0]?.id ?? '') }
   const changeLearnDomain = (value: string) => { setLearnDomain(value); setLearnTopic(domainOptions.find((domain) => domain.id === value)?.topics[0]?.id ?? '') }
   const changeAssessmentDomain = (value: string) => { setAssessmentDomain(value); setAssessmentTopic(domainOptions.find((domain) => domain.id === value)?.topics[0]?.id ?? '') }
   return (
@@ -128,7 +141,7 @@ export default function HomeSection({
           {sampleData && <Badge variant="outline" className="gap-1.5 rounded-full px-3 py-1.5"><Sparkles className="h-3.5 w-3.5 text-primary" />Examples fill empty areas</Badge>}
           <Button onClick={onStartAssessment} variant="outline" className="min-h-10 gap-2 rounded-xl px-4 active:scale-[0.98] transition-transform">
             <BrainCircuit className="h-4 w-4" />
-            Start assessment
+            Start a quiz
           </Button>
         </div>
       </div>
@@ -146,10 +159,25 @@ export default function HomeSection({
           <CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">Choose one topic. The AI CLI generates the explanation, guided example, quick check, then a focused exercise.</p><div className="grid gap-3 sm:grid-cols-2"><select aria-label="Learning domain" value={learnDomain} onChange={(event) => changeLearnDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Learning topic" value={learnTopic} onChange={(event) => setLearnTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{learnTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div><Button disabled={topicActionLoading || !learnTopic} onClick={() => onStartLearningTopic(learnDomain, learnTopic)} className="min-h-11 w-full gap-2 rounded-xl"><BookOpenCheck className="h-4 w-4" /><span>{topicActionLoading ? 'Preparing lesson…' : 'Start lesson'}</span></Button></CardContent>
         </Card>
         <Card className="rounded-3xl border-border/70 shadow-sm">
-          <CardHeader><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Assess one topic</div><CardTitle className="mt-2 flex items-center gap-2 text-xl"><Target className="h-5 w-5 text-primary" />Topic-only assessment</CardTitle></CardHeader>
-          <CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">This selection is independent from learning. Questions and mastery evidence stay inside the chosen topic.</p><div className="grid gap-3 sm:grid-cols-2"><select aria-label="Assessment domain" value={assessmentDomain} onChange={(event) => changeAssessmentDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Assessment topic" value={assessmentTopic} onChange={(event) => setAssessmentTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{assessmentTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div><Button disabled={!assessmentTopic} onClick={() => onStartAssessmentTopic(assessmentDomain, assessmentTopic)} variant="outline" className="min-h-11 w-full gap-2 rounded-xl"><BrainCircuit className="h-4 w-4" />Start topic assessment</Button></CardContent>
+          <CardHeader><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Quiz · multiple choice</div><CardTitle className="mt-2 flex items-center gap-2 text-xl"><Target className="h-5 w-5 text-primary" />Topic-only assessment</CardTitle></CardHeader>
+          <CardContent className="space-y-4"><p className="text-sm leading-6 text-muted-foreground">A short multiple-choice quiz on one topic (not a code exercise). Questions and mastery evidence stay inside the chosen topic.</p><div className="grid gap-3 sm:grid-cols-2"><select aria-label="Assessment domain" value={assessmentDomain} onChange={(event) => changeAssessmentDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Assessment topic" value={assessmentTopic} onChange={(event) => setAssessmentTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{assessmentTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div><Button disabled={!assessmentTopic} onClick={() => onStartAssessmentTopic(assessmentDomain, assessmentTopic)} variant="outline" className="min-h-11 w-full gap-2 rounded-xl"><BrainCircuit className="h-4 w-4" />Start topic assessment</Button></CardContent>
         </Card>
       </div>
+
+      <Card className="rounded-3xl border-border/70 shadow-sm" data-testid="code-practice">
+        <CardHeader><div className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Code exercise · hands-on</div><CardTitle className="mt-2 flex items-center gap-2 text-xl"><Code2 className="h-5 w-5 text-primary" />Code practice</CardTitle></CardHeader>
+        <CardContent className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-muted-foreground">A written coding task with hints and coach feedback, different from a quiz. {sampleData ? 'Sample mode opens the example exercise.' : codePractice.recommended ? <>Suggested: <span className="font-medium text-foreground">{codePractice.recommended.topicLabel}</span> ({codePractice.recommended.domainLabel}). {codePractice.recommended.reason}</> : 'Pick a topic to start; the exercise is written once and reused.'}</p>
+            {!sampleData && <div className="grid gap-3 sm:grid-cols-2"><select aria-label="Code exercise domain" value={codeDomain} onChange={(event) => changeCodeDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Code exercise topic" value={codeTopic} onChange={(event) => setCodeTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{codeTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div>}
+            <div className="flex flex-wrap gap-2"><Button disabled={topicActionLoading || (!sampleData && !codeTopic)} onClick={() => sampleData ? onStartPractice() : onStartCodeExercise(codeDomain, codeTopic)} className="min-h-11 gap-2 rounded-xl"><Code2 className="h-4 w-4" /><span>{topicActionLoading ? 'Preparing exercise…' : 'Start a code exercise'}</span></Button><Button onClick={onOpenSkillMap} variant="outline" className="min-h-11 gap-2 rounded-xl"><Compass className="h-4 w-4" />Choose in Skill Map</Button></div>
+          </div>
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Recent code exercises</div>
+            {codePractice.recent.length > 0 && !sampleData ? <ul className="mt-2 divide-y divide-border/70">{codePractice.recent.map((exercise) => <li key={exercise.id} className="flex items-center justify-between gap-3 py-2.5"><div className="min-w-0"><div className="truncate text-sm font-medium">{exercise.topicLabel}</div><div className="text-xs text-muted-foreground">{exercise.kind} · {exercise.domainLabel} · {new Date(exercise.when).toLocaleDateString()} · <span className={exercise.status === 'Passed' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>{exercise.status}</span></div></div><Button size="sm" variant="outline" disabled={topicActionLoading} className="min-h-9 shrink-0 rounded-xl" onClick={() => onStartCodeExercise(exercise.domainId, exercise.topicId)}>{exercise.status === 'Passed' ? 'Practice again' : 'Continue'}</Button></li>)}</ul> : <p className="mt-2 rounded-2xl bg-muted/60 p-4 text-sm text-muted-foreground">No code exercises yet. Start one on the left.</p>}
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-[1.55fr_0.95fr]">
         <Card className="overflow-hidden rounded-3xl border-border/70 bg-card shadow-sm">
@@ -175,7 +203,7 @@ export default function HomeSection({
                 {recommendation.rationale}
               </div>
               <Button onClick={() => recommendation.action ? (recommendation.action.kind === 'assess' ? onStartAssessmentTopic : onStartLearningTopic)(recommendation.action.domainId, recommendation.action.topicId) : onStartPractice()} disabled={Boolean(recommendation.action) && topicActionLoading} className="min-h-11 gap-2 rounded-xl px-5 shadow-sm active:scale-[0.98] transition-transform">
-                {recommendation.action?.label ?? 'Open practice workspace'} <ArrowRight className="h-4 w-4" />
+                {recommendation.action?.label ?? 'Start a code exercise'} <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
           </CardContent>
@@ -198,6 +226,7 @@ export default function HomeSection({
                     <span className="font-semibold">{domain.label}</span>
                     <span className={`text-xs font-medium ${levelTone[domain.level] ?? 'text-muted-foreground'}`}>{formatLevel(domain.level)}</span>
                   </div>
+                  {domain.caption && <div className="text-xs text-muted-foreground">{domain.caption}</div>}
                   <div className="flex items-center gap-3">
                     <Progress value={boundedScore} className="h-2 flex-1" aria-label={`${domain.label} ${boundedScore}%`} />
                     <span className="w-10 text-right font-mono text-xs tabular-nums text-muted-foreground">{boundedScore}%</span>
@@ -219,7 +248,7 @@ export default function HomeSection({
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Evidence trail</div>
-              <CardTitle className="mt-2 text-xl">Recent attempts</CardTitle>
+              <CardTitle className="mt-2 text-xl">Recent code attempts</CardTitle>
             </div>
             <Button onClick={onOpenHistory} variant="ghost" className="min-h-10 gap-1.5 rounded-xl px-3 text-sm text-muted-foreground hover:text-foreground">View history <ArrowRight className="h-3.5 w-3.5" /></Button>
           </CardHeader>

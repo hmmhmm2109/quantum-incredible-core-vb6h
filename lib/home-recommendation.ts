@@ -62,23 +62,60 @@ export function buildSkillDomains(sampleData: boolean, mastery: JsonRecord[]): S
       const item = rows.get(`${domain.id}/${topic.id}`)
       if (!item) return { id: topic.id, label: topic.label, score: 0, level: 'Not started', confidence: 0, state: 'ready', detail: 'No evidence yet. Take a topic assessment to start this rating.', evidence: [], prerequisite: null, isReal: true }
       const evidenceSummary = recordValue(item.evidence_summary)
+      // The account seed writes a score-0 placeholder row per domain; it is not evidence, so it must not count as an assessed topic.
+      if (evidenceSummary.state === 'awaiting_diagnostic') return { id: topic.id, label: topic.label, score: 0, level: 'Not started', confidence: 0, state: 'ready', detail: 'No evidence yet. Take a topic assessment to start this rating.', evidence: [], prerequisite: null, isReal: true }
       if (isLearnedRow(item)) return { id: topic.id, label: topic.label, score: 0, level: 'Learned', confidence: 0, state: 'ready', detail: stringValue(evidenceSummary.recommended_focus, 'Learned, not assessed yet.'), evidence: [], prerequisite: null, isReal: true }
       const evidence = arrayValue(evidenceSummary.evidence).filter((line): line is string => typeof line === 'string')
       return { id: topic.id, label: topic.label, score: numberValue(item.score), level: stringValue(item.level_band, 'Basic'), confidence: numberValue(item.confidence), state: 'active', detail: stringValue(evidenceSummary.recommended_focus, 'No topic explanation has been recorded yet.'), evidence, prerequisite: null, isReal: true }
     })
     const assessed = topics.filter((topic) => topic.state === 'active')
-    const score = assessed.length > 0 ? assessed.reduce((sum, topic) => sum + topic.score, 0) / assessed.length : 0
+    // Domain level = the best level the learner has shown on any assessed topic. A mean over assessed topics hid a topic that reached Intermediate behind untouched or zero-score ones.
+    const score = assessed.reduce((best, topic) => Math.max(best, topic.score), 0)
     const level = assessed.length > 0 ? (score >= 70 ? 'Advanced' : score >= 40 ? 'Intermediate' : 'Basic') : 'Not started'
     return { id: domain.id, label: domain.label, level, score, isReal: true, topics }
   })
 }
 
-// Home cards reuse the per-domain grouping from skillDomains: one card per domain, averaged over assessed topics.
+// Home cards reuse the per-domain grouping from skillDomains: one card per domain, level from the best assessed topic.
 export function buildHomeDomains(sampleData: boolean, skillDomains: SkillDomain[]): HomeDomain[] {
   if (sampleData) return SAMPLE_DOMAINS
   return skillDomains.map((domain) => {
     const assessed = domain.topics.filter((topic) => topic.state === 'active')
     const confidence = assessed.length > 0 ? assessed.reduce((sum, topic) => sum + topic.confidence, 0) / assessed.length : 0
-    return { id: domain.id, label: domain.label, score: domain.score, level: domain.level, confidence, focus: assessed[0]?.detail ?? '', isReal: true }
+    return { id: domain.id, label: domain.label, score: domain.score, level: domain.level, confidence, focus: assessed[0]?.detail ?? '', caption: `${assessed.length} of ${domain.topics.length} topics assessed`, isReal: true }
   })
+}
+
+// ---- Code practice entry points on Home (the quiz flow has its own cards) ----
+export type PracticeTopic = { domainId: string; topicId: string; domainLabel: string; topicLabel: string; reason: string }
+export type RecentExercise = PracticeTopic & { id: string; status: 'Passed' | 'Partial' | 'Retry'; when: string; kind: 'Code exercise' | 'Transfer exercise' }
+
+const topicRefOf = (domainId: string, topicId: string) => { const domain = findDomain(domainId); const topic = findTopic(domainId, topicId); return domain && topic ? { domainId, topicId, domainLabel: domain.label, topicLabel: topic.label } : null }
+
+/** Topic for "Start a code exercise": the weakest assessed topic below 70, otherwise the topic touched last (a lesson was read or marked learned), otherwise null (the learner picks one). */
+export function pickPracticeTopic(mastery: JsonRecord[]): PracticeTopic | null {
+  const rows = mastery.filter((item) => findTopic(stringValue(item.domain_id), stringValue(item.topic_id)))
+  const assessed = rows.filter((item) => recordValue(item.evidence_summary).state === 'assessed' && numberValue(item.score) < 70).sort((a, b) => numberValue(a.score) - numberValue(b.score))
+  const pick = assessed[0] ?? rows.reduce<JsonRecord | undefined>((best, item) => (!best || stringValue(item.updated_at) > stringValue(best.updated_at) ? item : best), undefined)
+  if (!pick) return null
+  const ref = topicRefOf(stringValue(pick.domain_id), stringValue(pick.topic_id))
+  if (!ref) return null
+  return { ...ref, reason: assessed[0] ? `Your weakest assessed topic (${Math.round(numberValue(pick.score))}%).` : 'The topic you worked on last.' }
+}
+
+/** Attempt rows hold activity ids like "lesson-<domain>-<topic>" (optionally ":transfer"); resolve them against the taxonomy. */
+export function recentExercises(attempts: JsonRecord[], limit = 4): RecentExercise[] {
+  const out: RecentExercise[] = []
+  for (const attempt of [...attempts].sort((a, b) => stringValue(b.created_at).localeCompare(stringValue(a.created_at)))) {
+    const activityId = stringValue(attempt.activity_id)
+    const match = /^lesson-(.+?)(:transfer)?$/.exec(activityId)
+    if (!match) continue
+    const domain = DOMAINS.find((entry) => match[1].startsWith(`${entry.id}-`))
+    const topic = domain?.topics.find((entry) => match[1] === `${domain.id}-${entry.id}`)
+    if (!domain || !topic) continue
+    const state = stringValue(attempt.completion_state)
+    out.push({ id: stringValue(attempt.id), domainId: domain.id, topicId: topic.id, domainLabel: domain.label, topicLabel: topic.label, reason: '', status: state === 'completed' ? 'Passed' : state === 'partial' ? 'Partial' : 'Retry', when: stringValue(attempt.created_at), kind: match[2] ? 'Transfer exercise' : 'Code exercise' })
+    if (out.length >= limit) break
+  }
+  return out
 }
