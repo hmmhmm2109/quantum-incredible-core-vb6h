@@ -1,6 +1,7 @@
 // One formatter for saved code attempts, shared by Home "Recent code attempts" and the History tab.
 // Old rows (before max_score/passed/title were stored) degrade gracefully: unknown outcome shows as "Submitted", never "Passed".
-import { DOMAINS } from './taxonomy'
+import { DOMAINS, findDomain, findTopic } from './taxonomy'
+import { multiTitle, parseMultiActivityId, topicsFromStored, type TopicRef } from './practice-multi'
 
 type Rec = Record<string, unknown>
 const rec = (value: unknown): Rec => (typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : {})
@@ -11,6 +12,16 @@ export type AttemptTone = 'good' | 'warn' | 'neutral'
 export type AttemptView = {
   id: string; title: string; chip: string; meta: string; status: string; tone: AttemptTone; scoreLabel: string | null
   when: string; whenFull: string; domainId: string | null; topicId: string | null; exercise: number | null
+  /** Every topic of a multi-topic exercise (chips); empty for single-topic attempts. */
+  topics: { domainId: string; topicId: string; label: string; domainLabel: string }[]
+  multi: boolean
+}
+
+/** Topics stored with a multi-topic attempt (feedback.topics, copied to execution_result.topics), as labelled refs. */
+export function attemptTopics(attempt: Rec): { ref: TopicRef; label: string; domainLabel: string }[] {
+  const stored = topicsFromStored(rec(attempt.feedback).topics).concat(topicsFromStored(rec(attempt.execution_result).topics))
+  const refs = stored.filter((ref, index) => stored.findIndex((other) => other.domain_id === ref.domain_id && other.topic_id === ref.topic_id) === index)
+  return refs.map((ref) => ({ ref, label: findTopic(ref.domain_id, ref.topic_id)?.label ?? ref.topic_id, domainLabel: findDomain(ref.domain_id)?.label ?? ref.domain_id }))
 }
 
 /** 'lesson-<domain>-<topic>[-pN][:transfer]' -> taxonomy ids and exercise number (null for ids that are not a practice exercise). */
@@ -77,19 +88,23 @@ export function attemptResult(attempt: Rec): { status: string; tone: AttemptTone
 
 export function attemptView(attempt: Rec, index = 0, now = Date.now()): AttemptView {
   const feedback = rec(attempt.feedback)
-  const parsed = parseActivityId(str(attempt.activity_id))
+  const multiId = parseMultiActivityId(str(attempt.activity_id))
+  const multiTopics = multiId ? attemptTopics(attempt) : []
+  const parsed = multiId ? null : parseActivityId(str(attempt.activity_id))
   const result = attemptResult(attempt)
-  const exercise = parsed?.exercise ?? null
+  const exercise = multiId ? multiId.exercise : parsed?.exercise ?? null
   const named = str(feedback.title).trim() || shortActivityTitle(feedback.domain)
-  const fallback = parsed ? (parsed.transfer ? `${parsed.topicLabel} · Transfer exercise` : `${parsed.topicLabel} · Exercise ${exercise}`) : 'Practice attempt'
+  const multiTitleText = multiTopics.length > 0 ? multiTitle(multiTopics.map((entry) => entry.label)) : 'Multi-topic exercise'
+  const fallback = multiId ? multiTitleText : parsed ? (parsed.transfer ? `${parsed.topicLabel} · Transfer exercise` : `${parsed.topicLabel} · Exercise ${exercise}`) : 'Practice attempt'
   const hints = num(attempt.hint_count) ?? 0
   const when = relativeTime(str(attempt.created_at), now)
-  const parts = [parsed ? (parsed.transfer ? 'Transfer exercise' : `Exercise ${exercise}`) : 'Code exercise', hints > 0 ? `${hints} hint${hints === 1 ? '' : 's'}` : ''].filter(Boolean)
+  const parts = [multiId ? `Exercise ${exercise}` : parsed ? (parsed.transfer ? 'Transfer exercise' : `Exercise ${exercise}`) : 'Code exercise', hints > 0 ? `${hints} hint${hints === 1 ? '' : 's'}` : ''].filter(Boolean)
   return {
     id: str(attempt.id) || `attempt-${index + 1}`,
-    title: named || fallback,
-    chip: parsed ? `${parsed.domainLabel} · ${parsed.topicLabel}` : 'Embedded systems',
+    title: multiId ? multiTitleText : named || fallback,
+    chip: multiId ? (multiTopics.length > 0 ? multiTopics.map((entry) => entry.label).join(' · ') : 'Several topics') : parsed ? `${parsed.domainLabel} · ${parsed.topicLabel}` : 'Embedded systems',
     meta: parts.join(' · '), status: result.status, tone: result.tone, scoreLabel: result.scoreLabel,
-    when: when.short, whenFull: when.full, domainId: parsed?.domainId ?? null, topicId: parsed?.topicId ?? null, exercise,
+    when: when.short, whenFull: when.full, domainId: multiId ? multiTopics[0]?.ref.domain_id ?? null : parsed?.domainId ?? null, topicId: multiId ? multiTopics[0]?.ref.topic_id ?? null : parsed?.topicId ?? null, exercise,
+    topics: multiTopics.map((entry) => ({ domainId: entry.ref.domain_id, topicId: entry.ref.topic_id, label: entry.label, domainLabel: entry.domainLabel })), multi: Boolean(multiId),
   }
 }

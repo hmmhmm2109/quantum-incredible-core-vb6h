@@ -1,15 +1,15 @@
 'use client'
 
 import * as React from 'react'
-import { ArrowRight, ChevronDown, FlaskConical, Loader2, LockKeyhole, RefreshCw, Search, Target, X } from 'lucide-react'
+import { ArrowRight, FlaskConical, Loader2, LockKeyhole, RefreshCw, Target, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { useAiProvider } from '@/hooks/use-ai-provider'
 import { DEFAULT_QUESTIONS, effectiveQuestionCount, MAX_PER_TOPIC, MAX_QUESTIONS, MAX_TOPICS, perTopicCount, topicKey, type AssessmentMode, type TopicRef } from '@/lib/assessment-plan'
 import { DOMAINS } from '@/lib/taxonomy'
-import type { SkillDomain, SkillTopic } from '@/app/sections/skill-map-section'
+import type { SkillDomain } from '@/app/sections/skill-map-section'
+import TopicMultiSelect, { assessed, skillInfo } from '@/app/sections/topic-multiselect'
 
 export type CustomAssessmentRequest = { topics: TopicRef[]; count: number; mode: AssessmentMode; fresh: boolean }
 type Unfinished = { answered: number; total: number }
@@ -38,8 +38,6 @@ function loadStored(): Stored | null {
 }
 
 const parseKey = (key: string): TopicRef => { const [domain_id, topic_id] = key.split('/'); return { domain_id, topic_id } }
-const assessed = (topic?: SkillTopic) => topic?.state === 'active'
-const bandStyle = (level: string) => level === 'Advanced' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : level === 'Intermediate' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'bg-muted text-muted-foreground'
 
 export default function AssessmentPicker({ skillDomains, sampleData, busy, findUnfinished, onStart, onBack }: Props) {
   const ai = useAiProvider()
@@ -50,11 +48,7 @@ export default function AssessmentPicker({ skillDomains, sampleData, busy, findU
   const [open, setOpen] = React.useState<Set<string>>(new Set([DOMAINS[0].id]))
   const [restored, setRestored] = React.useState(false)
 
-  const info = React.useMemo(() => {
-    const map = new Map<string, SkillTopic>()
-    if (!sampleData) for (const domain of skillDomains) for (const topic of domain.topics) map.set(`${domain.id}/${topic.id}`, topic)
-    return map
-  }, [skillDomains, sampleData])
+  const info = React.useMemo(() => skillInfo(skillDomains, sampleData), [skillDomains, sampleData])
 
   // Restore the last selection once (browser storage is only a convenience: any failure just starts empty).
   React.useEffect(() => {
@@ -78,7 +72,6 @@ export default function AssessmentPicker({ skillDomains, sampleData, busy, findU
   const domainOfSelection = new Set(topics.map((topic) => topic.domain_id))
   const valid = topics.length > 0 && !tooMany && (mode === 'knowledge_check' || domainOfSelection.size === 1)
   const unfinished = valid ? findUnfinished(topics, mode) : null
-  const needle = query.trim().toLowerCase()
 
   // In domain mode a selection never spans domains: touching another domain starts a new one.
   const apply = (next: Set<string>, touchedDomain?: string) => {
@@ -148,59 +141,12 @@ export default function AssessmentPicker({ skillDomains, sampleData, busy, findU
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_21rem]">
-        <div className="min-w-0 space-y-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter topics" aria-label="Filter topics" className="min-h-10 rounded-xl pl-9" />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" disabled={assessedCount === 0} onClick={() => preset('weakest')} className="min-h-10 rounded-xl"><span>Weakest topics</span></Button>
-              <Button type="button" variant="outline" size="sm" disabled={unassessedCount === 0} onClick={() => preset('unassessed')} className="min-h-10 rounded-xl"><span>Not yet assessed</span></Button>
-              <Button type="button" variant="ghost" size="sm" disabled={selected.size === 0} onClick={() => setSelected(new Set())} className="min-h-10 gap-1 rounded-xl"><X className="h-3.5 w-3.5" /><span>Clear</span></Button>
-            </div>
-          </div>
-
-          {DOMAINS.map((domain) => {
-            const rows = domain.topics.map((topic) => ({ topic, key: `${domain.id}/${topic.id}`, skill: info.get(`${domain.id}/${topic.id}`) }))
-            const shown = needle ? rows.filter((row) => `${row.topic.label} ${row.topic.subtopics.join(' ')}`.toLowerCase().includes(needle) || domain.label.toLowerCase().includes(needle)) : rows
-            if (shown.length === 0) return null
-            const keys = rows.map((row) => row.key)
-            const picked = keys.filter((key) => selected.has(key)).length
-            const expanded = needle ? true : open.has(domain.id)
-            const regionId = `picker-${domain.id}`
-            const domainSkill = skillDomains.find((entry) => entry.id === domain.id)
-            return (
-              <section key={domain.id} className="rounded-3xl border border-border/70 bg-muted/35 shadow-sm">
-                <div className="flex items-center gap-3 px-4 py-3">
-                  <input type="checkbox" aria-label={`Select all ${domain.label} topics`} checked={picked === keys.length} ref={(element) => { if (element) element.indeterminate = picked > 0 && picked < keys.length }} onChange={() => toggleDomain(domain.id, keys)} className="h-4 w-4 shrink-0 cursor-pointer accent-primary" />
-                  <button type="button" aria-expanded={expanded} aria-controls={regionId} onClick={() => setOpen((current) => { const next = new Set(current); if (next.has(domain.id)) next.delete(domain.id); else next.add(domain.id); return next })} className="flex min-h-10 min-w-0 flex-1 items-center justify-between gap-3 rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    <span className="min-w-0"><span className="block text-base font-semibold">{domain.label}</span><span className="block text-xs text-muted-foreground"><span>{picked} of {domain.topics.length} selected</span>{!sampleData && domainSkill && domainSkill.level !== 'Not started' && <span> · {domainSkill.level}</span>}</span></span>
-                    <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
-                  </button>
-                </div>
-                {expanded && (
-                  <ul id={regionId} className="grid gap-2 px-3 pb-3 sm:grid-cols-2">
-                    {shown.map(({ topic, key, skill }) => {
-                      const on = selected.has(key)
-                      const inputId = `pick-${key.replace('/', '-')}`
-                      return (
-                        <li key={key}>
-                          <label htmlFor={inputId} className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl border p-3 transition-colors focus-within:ring-2 focus-within:ring-ring ${on ? 'border-primary bg-background shadow-sm' : 'border-border/70 bg-card hover:border-primary/50'}`}>
-                            <input id={inputId} type="checkbox" checked={on} onChange={() => toggleTopic(key)} className="h-4 w-4 shrink-0 cursor-pointer accent-primary" />
-                            <span className="min-w-0 flex-1 text-sm font-medium leading-5">{topic.label}</span>
-                            {assessed(skill) ? <span className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] tabular-nums ${bandStyle(skill!.level)}`}>{skill!.level} {Math.round(skill!.score)}%</span> : <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{skill?.level === 'Learned' ? 'Learned' : 'New'}</span>}
-                          </label>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-              </section>
-            )
-          })}
-          {needle && DOMAINS.every((domain) => !domain.topics.some((topic) => `${topic.label} ${topic.subtopics.join(' ')}`.toLowerCase().includes(needle) || domain.label.toLowerCase().includes(needle))) && <p className="rounded-2xl bg-muted/60 p-5 text-sm text-muted-foreground">No topic matches this filter.</p>}
-        </div>
+        <TopicMultiSelect skillDomains={skillDomains} sampleData={sampleData} selected={selected} onToggleTopic={toggleTopic} onToggleDomain={toggleDomain} open={open} onOpenChange={setOpen} query={query} onQueryChange={setQuery} idPrefix="picker"
+          toolbar={<>
+            <Button type="button" variant="outline" size="sm" disabled={assessedCount === 0} onClick={() => preset('weakest')} className="min-h-10 rounded-xl"><span>Weakest topics</span></Button>
+            <Button type="button" variant="outline" size="sm" disabled={unassessedCount === 0} onClick={() => preset('unassessed')} className="min-h-10 rounded-xl"><span>Not yet assessed</span></Button>
+            <Button type="button" variant="ghost" size="sm" disabled={selected.size === 0} onClick={() => setSelected(new Set())} className="min-h-10 gap-1 rounded-xl"><X className="h-3.5 w-3.5" /><span>Clear</span></Button>
+          </>} />
 
         <Card className="h-fit rounded-3xl border-border/70 shadow-sm xl:sticky xl:top-6">
           <CardHeader>

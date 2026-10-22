@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react'
 
-import { ArrowRight, BookOpenCheck, BrainCircuit, CheckCircle2, Clock3, Code2, Compass, FlaskConical, LockKeyhole, Sparkles, Target, TerminalSquare } from 'lucide-react'
+import { ArrowRight, BookOpenCheck, BrainCircuit, CheckCircle2, Clock3, Code2, Compass, FlaskConical, Layers, LockKeyhole, Sparkles, Target, TerminalSquare } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import type { PracticeTopic, RecentExercise } from '@/lib/home-recommendation'
+import type { TopicRef } from '@/lib/practice-multi'
 
 export type HomeDomain = {
   id: string
@@ -38,6 +39,7 @@ export type HomeAttempt = {
   when: string
   whenFull: string
   isReal: boolean
+  topics?: { domainId: string; topicId: string; label: string }[] // every topic of a multi-topic exercise
 }
 
 export type HomeRecommendation = {
@@ -77,6 +79,8 @@ type HomeSectionProps = {
   // Code exercises (the other activity type): recommended topic, recent attempts, and the actions that open them.
   codePractice: { recommended: PracticeTopic | null; recent: RecentExercise[] }
   onStartCodeExercise: (domainId: string, topicId: string) => void
+  onChooseTopics: (seed: TopicRef[]) => void // opens the multi-topic code-practice picker, seeded with the topic selected here
+  onStartMultiExercise: (topics: TopicRef[]) => void // reopens the newest exercise of a multi-topic set
 }
 
 const levelTone: Record<string, string> = {
@@ -118,6 +122,8 @@ export default function HomeSection({
   topicActionLoading,
   codePractice,
   onStartCodeExercise,
+  onChooseTopics,
+  onStartMultiExercise,
 }: HomeSectionProps) {
   const [greeting, setGreeting] = useState('Welcome back')
   useEffect(() => { setGreeting(greetingForHour(new Date().getHours())) }, [])
@@ -183,11 +189,11 @@ export default function HomeSection({
           <div className="space-y-4">
             <p className="text-sm leading-6 text-muted-foreground">A written coding task with hints and coach feedback, different from a quiz. {sampleData ? 'Sample mode opens the example exercise.' : codePractice.recommended ? <>Suggested: <span className="font-medium text-foreground">{codePractice.recommended.topicLabel}</span> ({codePractice.recommended.domainLabel}). {codePractice.recommended.reason}</> : 'Pick a topic to start; the exercise is written once and reused.'}</p>
             {!sampleData && <div className="grid gap-3 sm:grid-cols-2"><select aria-label="Code exercise domain" value={codeDomain} onChange={(event) => changeCodeDomain(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{domainOptions.map((domain) => <option key={domain.id} value={domain.id}>{domain.label}</option>)}</select><select aria-label="Code exercise topic" value={codeTopic} onChange={(event) => setCodeTopic(event.target.value)} className="min-h-11 rounded-xl border border-input bg-background px-3 text-sm">{codeTopics.map((topic) => <option key={topic.id} value={topic.id}>{topic.label}</option>)}</select></div>}
-            <div className="flex flex-wrap gap-2"><Button disabled={topicActionLoading || (!sampleData && !codeTopic)} onClick={() => sampleData ? onStartPractice() : onStartCodeExercise(codeDomain, codeTopic)} className="min-h-11 gap-2 rounded-xl"><Code2 className="h-4 w-4" /><span>{topicActionLoading ? 'Preparing exercise…' : 'Start a code exercise'}</span></Button><Button onClick={onOpenSkillMap} variant="outline" className="min-h-11 gap-2 rounded-xl"><Compass className="h-4 w-4" />Choose in Skill Map</Button></div>
+            <div className="flex flex-wrap gap-2"><Button disabled={topicActionLoading || (!sampleData && !codeTopic)} onClick={() => sampleData ? onStartPractice() : onStartCodeExercise(codeDomain, codeTopic)} className="min-h-11 gap-2 rounded-xl"><Code2 className="h-4 w-4" /><span>{topicActionLoading ? 'Preparing exercise…' : 'Start a code exercise'}</span></Button><Button onClick={onOpenSkillMap} variant="outline" className="min-h-11 gap-2 rounded-xl"><Compass className="h-4 w-4" />Choose in Skill Map</Button>{!sampleData && <Button onClick={() => onChooseTopics(codeTopic ? [{ domain_id: codeDomain, topic_id: codeTopic }] : [])} disabled={topicActionLoading} variant="outline" className="min-h-11 gap-2 rounded-xl"><Layers className="h-4 w-4" /><span>Choose topics…</span></Button>}</div>{!sampleData && <p className="text-xs leading-5 text-muted-foreground">Need more than one topic? <span className="font-medium text-foreground">Choose topics…</span> combines up to 4 into one exercise, or runs them one after another.</p>}
           </div>
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Recent code exercises</div>
-            {codePractice.recent.length > 0 && !sampleData ? <ul className="mt-2 divide-y divide-border/70">{codePractice.recent.map((exercise) => <li key={exercise.id} className="flex items-center justify-between gap-3 py-2.5"><div className="min-w-0"><div className="truncate text-sm font-medium">{exercise.topicLabel}</div><div className="text-xs text-muted-foreground">{exercise.kind} · {exercise.domainLabel} · {new Date(exercise.when).toLocaleDateString()} · <span className={exercise.status === 'Passed' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>{exercise.status}</span></div></div><Button size="sm" variant="outline" disabled={topicActionLoading} className="min-h-9 shrink-0 rounded-xl" onClick={() => onStartCodeExercise(exercise.domainId, exercise.topicId)}>{exercise.status === 'Passed' ? 'Practice again' : 'Continue'}</Button></li>)}</ul> : <p className="mt-2 rounded-2xl bg-muted/60 p-4 text-sm text-muted-foreground">No code exercises yet. Start one on the left.</p>}
+            {codePractice.recent.length > 0 && !sampleData ? <ul className="mt-2 divide-y divide-border/70">{codePractice.recent.map((exercise) => <li key={exercise.id} className="flex items-center justify-between gap-3 py-2.5"><div className="min-w-0"><div className="truncate text-sm font-medium">{exercise.topicLabel}</div><div className="text-xs text-muted-foreground">{exercise.kind} · {exercise.domainLabel} · {new Date(exercise.when).toLocaleDateString()} · <span className={exercise.status === 'Passed' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>{exercise.status}</span></div></div><Button size="sm" variant="outline" disabled={topicActionLoading} className="min-h-9 shrink-0 rounded-xl" onClick={() => exercise.topics ? onStartMultiExercise(exercise.topics) : onStartCodeExercise(exercise.domainId, exercise.topicId)}>{exercise.status === 'Passed' ? 'Practice again' : 'Continue'}</Button></li>)}</ul> : <p className="mt-2 rounded-2xl bg-muted/60 p-4 text-sm text-muted-foreground">No code exercises yet. Start one on the left.</p>}
           </div>
         </CardContent>
       </Card>
@@ -284,7 +290,7 @@ export default function HomeSection({
                       </span>
                       <div className="min-w-0">
                         <div className="line-clamp-2 font-medium" title={attempt.title}>{attempt.title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px] font-normal">{attempt.chip}</Badge><span>{attempt.meta}</span>{!attempt.isReal && <Badge variant="outline" className="rounded-full px-2 py-0 text-[10px]">Example</Badge>}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">{attempt.topics && attempt.topics.length > 0 ? attempt.topics.map((entry) => <Badge key={`${entry.domainId}/${entry.topicId}`} variant="secondary" className="rounded-full px-2 py-0 text-[10px] font-normal">{entry.label}</Badge>) : <Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px] font-normal">{attempt.chip}</Badge>}<span>{attempt.meta}</span>{!attempt.isReal && <Badge variant="outline" className="rounded-full px-2 py-0 text-[10px]">Example</Badge>}</div>
                       </div>
                     </div>
                     <div className="flex items-center gap-4 pl-11 text-sm sm:pl-0"><span className={`font-semibold ${attempt.tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : attempt.tone === 'warn' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>{attempt.status}{attempt.scoreLabel && <span className="ml-1.5 font-mono text-xs font-normal tabular-nums">{attempt.scoreLabel}</span>}</span><span title={attempt.whenFull} className="text-xs tabular-nums text-muted-foreground">{attempt.when}</span></div>

@@ -10,6 +10,7 @@ import { CLAUDE_RUNTIME, LESSON_VARIANTS, type ClaudeState, type JsonRecord, typ
 import { fallbackClaudeFromReview, isRecord, normalizeCoachResult, recordValue, stringValue } from '@/lib/normalize'
 import { HttpError, withRetry } from '@/lib/retry'
 import { concealHints, SAMPLE_HINTS } from '@/lib/sample-data'
+import type { TopicRef } from '@/lib/practice-multi'
 
 type LessonDeps = {
   authFetch: ReturnType<typeof useAuth>['authFetch']
@@ -194,5 +195,23 @@ export function useLesson({ authFetch, setActiveAgentId, setClaudeState, setSele
     }
   }
 
-  return { lesson, lessonData, practiceLoad, setPracticeLoad, markingLearned, retrievalResult, retrievalStatus, retrievalError, transferResult, transferStatus, transferError, lessonRef, variantRef, practiceReqRef, loadLesson, loadLessonPractice, enrichSection, enriching, enrichErrors, startTopicLesson, markLearned, lessonRetrievalSubmit, lessonTransferSubmit, openTopicPractice }
+  // Multi-topic practice: ONE integrated exercise over 2-4 topics (POST /api/lesson {part:'practice', topics}); new ones take ~30-60 s, a cached set opens at once.
+  // `next` asks for another exercise on the same topics (only written when the newest one has a completed attempt).
+  const openMultiPractice = async (topics: TopicRef[], next = false) => {
+    const request = ++practiceReqRef.current
+    setPracticeLoad({ domainId: topics[0].domain_id, topicId: topics[0].topic_id, status: 'loading', error: null })
+    try {
+      const practice = await fetchLesson({ part: 'practice', topics, ...(next ? { next: true } : {}) })
+      if (practiceReqRef.current !== request) return
+      setPracticeLoad(null)
+      lessonRef.current = null; setSelectedActivity(practice.activity); setHints(concealHints(practice.hints)); clearWorkspace(); setView('practice')
+    } catch (error) {
+      if (practiceReqRef.current !== request) return
+      const message = error instanceof Error ? error.message : 'The AI provider could not be reached.'
+      setPracticeLoad({ domainId: topics[0].domain_id, topicId: topics[0].topic_id, status: 'error', error: message })
+      toast.error(`Could not prepare the exercise. ${message}`, { action: { label: 'Retry', onClick: () => void openMultiPractice(topics, next) } })
+    }
+  }
+
+  return { lesson, lessonData, practiceLoad, setPracticeLoad, markingLearned, retrievalResult, retrievalStatus, retrievalError, transferResult, transferStatus, transferError, lessonRef, variantRef, practiceReqRef, loadLesson, loadLessonPractice, enrichSection, enriching, enrichErrors, startTopicLesson, markLearned, lessonRetrievalSubmit, lessonTransferSubmit, openTopicPractice, openMultiPractice }
 }

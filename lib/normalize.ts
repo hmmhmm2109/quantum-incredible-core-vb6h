@@ -26,6 +26,8 @@ export function normalizeActivity(raw: unknown): PracticeActivity | null {
     execution_profile: { runtime: stringValue(execution.runtime, 'none'), language: nullableString(execution.language), allowed_actions: arrayValue(execution.allowed_actions).filter((value): value is string => typeof value === 'string'), time_limit_seconds: numberValue(execution.time_limit_seconds), network: stringValue(execution.network, 'unavailable') },
     test_plan: arrayValue(raw.test_plan).filter(isRecord).map((test) => ({ name: stringValue(test.name, 'Test'), purpose: stringValue(test.purpose), visibility: stringValue(test.visibility, 'public') })),
     rubric: arrayValue(raw.rubric).filter(isRecord).map((criterion) => ({ criterion: stringValue(criterion.criterion, 'Criterion'), weight: numberValue(criterion.weight), evidence: stringValue(criterion.evidence) })),
+    // Only multi-topic exercises carry this; single-topic activities stay without the key.
+    ...(Array.isArray(raw.topics_covered) && raw.topics_covered.length > 0 && { topics_covered: arrayValue(raw.topics_covered).filter(isRecord).map((entry) => ({ domain_id: stringValue(entry.domain_id), topic_id: stringValue(entry.topic_id), how_used: stringValue(entry.how_used) })) }),
   }
 }
 

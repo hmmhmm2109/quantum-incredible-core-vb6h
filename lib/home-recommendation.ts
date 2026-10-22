@@ -4,7 +4,8 @@ import type { JsonRecord, SavedState } from '@/lib/app-types'
 import { arrayValue, isRecord, numberValue, recordValue, stringValue } from '@/lib/normalize'
 import { SAMPLE_ATTEMPTS, SAMPLE_DOMAINS, SAMPLE_RECOMMENDATION, sampleFocusTopicId } from '@/lib/sample-data'
 import { aggregateDomain, aggregateOverall } from '@/lib/domain-score'
-import { attemptResult, attemptView, parseActivityId } from '@/lib/attempt-view'
+import { attemptResult, attemptTopics, attemptView, parseActivityId } from '@/lib/attempt-view'
+import { parseMultiActivityId, type TopicRef } from '@/lib/practice-multi'
 import { DOMAINS, findDomain, findTopic } from '@/lib/taxonomy'
 
 // Real header stats: consecutive local days (ending today or yesterday) with a graded response or attempt, and the total of both.
@@ -100,7 +101,7 @@ export function buildHomeDomains(sampleData: boolean, skillDomains: SkillDomain[
 
 // ---- Code practice entry points on Home (the quiz flow has its own cards) ----
 export type PracticeTopic = { domainId: string; topicId: string; domainLabel: string; topicLabel: string; reason: string }
-export type RecentExercise = PracticeTopic & { id: string; status: 'Passed' | 'Partial' | 'Retry'; when: string; kind: 'Code exercise' | 'Transfer exercise' }
+export type RecentExercise = PracticeTopic & { id: string; status: 'Passed' | 'Partial' | 'Retry'; when: string; kind: 'Code exercise' | 'Transfer exercise' | 'Multi-topic exercise'; topics?: TopicRef[] }
 
 const topicRefOf = (domainId: string, topicId: string) => { const domain = findDomain(domainId); const topic = findTopic(domainId, topicId); return domain && topic ? { domainId, topicId, domainLabel: domain.label, topicLabel: topic.label } : null }
 
@@ -120,6 +121,16 @@ export function recentExercises(attempts: JsonRecord[], limit = 4): RecentExerci
   const out: RecentExercise[] = []
   for (const attempt of [...attempts].sort((a, b) => stringValue(b.created_at).localeCompare(stringValue(a.created_at)))) {
     const activityId = stringValue(attempt.activity_id)
+    const multiId = parseMultiActivityId(activityId)
+    if (multiId) {
+      // A multi-topic attempt carries its topics in feedback.topics; without them the set cannot be reopened, so it is not listed.
+      const covered = attemptTopics(attempt)
+      if (covered.length < 2) continue
+      const outcome = attemptResult(attempt)
+      out.push({ id: stringValue(attempt.id), domainId: covered[0].ref.domain_id, topicId: covered[0].ref.topic_id, domainLabel: [...new Set(covered.map((entry) => entry.domainLabel))].join(' + '), topicLabel: covered.map((entry) => entry.label).join(' + '), reason: '', status: outcome.status === 'Passed' ? 'Passed' : outcome.status === 'Partial' ? 'Partial' : 'Retry', when: stringValue(attempt.created_at), kind: 'Multi-topic exercise', topics: covered.map((entry) => entry.ref) })
+      if (out.length >= limit) break
+      continue
+    }
     const parsed = parseActivityId(stringValue(attempt.activity_id))
     if (!parsed) continue
     const result = attemptResult(attempt)

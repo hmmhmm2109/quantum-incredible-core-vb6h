@@ -2,7 +2,7 @@
 
 export const CLAUDE_RUNTIME = 'claude-cli-oauth'
 
-export type ViewName = 'home' | 'practice' | 'assessment' | 'review' | 'lesson' | 'skill-map' | 'assess-setup' | 'history' | 'profile'
+export type ViewName = 'home' | 'practice' | 'assessment' | 'review' | 'lesson' | 'skill-map' | 'assess-setup' | 'practice-setup' | 'history' | 'profile'
 export type JsonRecord = Record<string, unknown>
 
 export type SavedState = {
